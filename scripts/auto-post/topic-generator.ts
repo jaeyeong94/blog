@@ -86,7 +86,12 @@ Important: Return ONLY valid JSON, no markdown formatting, no explanations.`;
   private extractTextContent(message: Anthropic.Message): string {
     const content = message.content[0];
     if (content.type === 'text') {
-      return content.text;
+      let text = content.text.trim();
+      // markdown 코드 블록 제거
+      if (text.startsWith('```')) {
+        text = text.replace(/^```(?:json)?\s*\n/, '').replace(/\n```\s*$/, '');
+      }
+      return text;
     }
     throw new Error('Unexpected response format from Claude');
   }
