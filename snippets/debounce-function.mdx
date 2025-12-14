@@ -1,0 +1,56 @@
+---
+title: 'Debounce Function'
+description: '입력 이벤트를 지연시켜 불필요한 호출을 방지하는 디바운스 함수'
+language: 'TypeScript'
+tags: ['utils', 'performance', 'typescript']
+date: '2024-12-10'
+---
+
+## 설명
+
+디바운스는 연속적으로 발생하는 이벤트를 그룹화하여 마지막 이벤트만 처리하는 기법입니다.
+검색창 자동완성, 윈도우 리사이즈 등에서 성능 최적화에 유용합니다.
+
+## 코드
+
+```typescript
+function debounce<T extends (...args: any[]) => any>(
+  func: T,
+  delay: number
+): (...args: Parameters<T>) => void {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  return function (...args: Parameters<T>) {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+
+    timeoutId = setTimeout(() => {
+      func(...args);
+    }, delay);
+  };
+}
+```
+
+## 사용 예시
+
+```typescript
+// 검색 입력 핸들러
+const handleSearch = (query: string) => {
+  console.log('Searching for:', query);
+  // API 호출 등...
+};
+
+const debouncedSearch = debounce(handleSearch, 300);
+
+// 사용
+input.addEventListener('input', (e) => {
+  debouncedSearch(e.target.value);
+});
+```
+
+## 주의사항
+
+- `delay`: 대기 시간(ms). 보통 200-500ms 사용
+- 화살표 함수 대신 일반 함수를 사용하여 `this` 컨텍스트 유지
+- React에서는 `useMemo`나 `useCallback`과 함께 사용
