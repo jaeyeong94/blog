@@ -23,22 +23,48 @@ export class ContentGenerator {
   }
 
   async generateContent(topic: TopicSuggestion): Promise<GeneratedContent> {
+    console.log('[INFO] Step 1: Generating content in English...');
+    const englishContent = await this.generateEnglishContent(topic);
+
+    console.log('[INFO] Step 2: Translating to Korean...');
+    const koreanContent = await this.translateToKorean(englishContent, topic);
+
+    return koreanContent;
+  }
+
+  private async generateEnglishContent(topic: TopicSuggestion): Promise<{
+    title: string;
+    excerpt: string;
+    content: string;
+  }> {
     const prompt = this.buildContentPrompt(topic);
 
-    const message = await this.client.messages.create({
+    // 스트리밍 방식으로 변경 (긴 콘텐츠 생성을 위해 필요)
+    const stream = await this.client.messages.create({
       model: this.config.model,
-      max_tokens: 16384, // 매우 긴 콘텐츠를 위한 충분한 토큰 수
-      temperature: 0.7, // 균형잡힌 창의성
+      max_tokens: 16384, // 영어 콘텐츠 생성
+      temperature: 0.7,
       messages: [
         {
           role: 'user',
           content: prompt,
         },
       ],
+      stream: true,
     });
 
-    const responseText = this.extractTextContent(message);
-    const parsed = this.parseDelimitedResponse(responseText);
+    // 스트리밍 응답을 모두 수집
+    let fullText = '';
+    for await (const chunk of stream) {
+      if (
+        chunk.type === 'content_block_delta' &&
+        chunk.delta.type === 'text_delta'
+      ) {
+        fullText += chunk.delta.text;
+      }
+    }
+
+    const parsed = this.parseDelimitedResponse(fullText);
 
     // 단어 수 검증
     const wordCount = this.countWords(parsed.content);
@@ -47,6 +73,80 @@ export class ContentGenerator {
         `Generated content too short: ${wordCount} words (minimum: ${this.config.minWordCount})`
       );
     }
+
+    console.log(`[INFO] English content generated: ${wordCount} words`);
+    return parsed;
+  }
+
+  private async translateToKorean(
+    englishContent: { title: string; excerpt: string; content: string },
+    topic: TopicSuggestion
+  ): Promise<GeneratedContent> {
+    const translationPrompt = `You are a professional technical translator specializing in software engineering content.
+
+Translate the following technical blog post from English to Korean.
+
+⚠️ CRITICAL: THIS IS A FULL TRANSLATION, NOT A SUMMARY!
+⚠️ Translate EVERY SINGLE SENTENCE and paragraph
+⚠️ Do NOT skip, condense, or summarize any content
+⚠️ The translated version should be approximately the SAME LENGTH as the original
+
+CRITICAL REQUIREMENTS:
+- Translate THE ENTIRE article word-for-word
+- Maintain ALL technical accuracy
+- Keep ALL code blocks UNCHANGED (do NOT translate code)
+- Keep ALL markdown formatting UNCHANGED
+- Translate code comments to Korean
+- Use natural Korean technical writing style
+- Maintain the EXACT same level of detail and depth
+- If the original has 10 paragraphs, the translation MUST have 10 paragraphs
+
+ORIGINAL TITLE:
+${englishContent.title}
+
+ORIGINAL EXCERPT:
+${englishContent.excerpt}
+
+ORIGINAL CONTENT:
+${englishContent.content}
+
+Return the translation in this format:
+===TITLE===
+Translated title in Korean
+===EXCERPT===
+Translated excerpt in Korean
+===CONTENT===
+Translated content in Korean (keep code blocks unchanged, translate comments)
+
+Begin translation now.`;
+
+    const stream = await this.client.messages.create({
+      model: this.config.model,
+      max_tokens: 32768, // 한글 번역은 더 많은 토큰 필요
+      temperature: 0.3, // 낮은 temperature로 정확한 번역
+      messages: [
+        {
+          role: 'user',
+          content: translationPrompt,
+        },
+      ],
+      stream: true,
+    });
+
+    let fullText = '';
+    for await (const chunk of stream) {
+      if (
+        chunk.type === 'content_block_delta' &&
+        chunk.delta.type === 'text_delta'
+      ) {
+        fullText += chunk.delta.text;
+      }
+    }
+
+    const parsed = this.parseDelimitedResponse(fullText);
+    const wordCount = this.countWords(parsed.content);
+
+    console.log(`[INFO] Korean translation completed: ${wordCount} words`);
 
     return {
       ...parsed,
@@ -74,15 +174,16 @@ CRITICAL LENGTH REQUIREMENT:
 
 REQUIREMENTS:
 
-1. STRUCTURE (Each section should be substantial):
-   - Engaging introduction with a hook (200+ words)
+1. STRUCTURE (Each section MUST be substantial):
+   - Introduction: MINIMUM 200 words, 3-4 paragraphs
+   - Each main section: MINIMUM 300-400 words, 4-5 paragraphs
    - Clear section headings (use ##, ###)
-   - Deep technical explanations with examples (300+ words per major section)
+   - Deep technical explanations with step-by-step examples
    - Multiple code examples with syntax highlighting (use \`\`\`language)
    - Real-world use cases with detailed scenarios
    - Performance considerations with actual benchmarks
-   - Best practices with explanations
-   - Thoughtful conclusion with future outlook (150+ words)
+   - Best practices with WHY explanations
+   - Conclusion: MINIMUM 150 words, 2-3 paragraphs
 
 2. WRITING STYLE:
    - Technical but accessible
@@ -116,20 +217,26 @@ Compelling 1-2 sentence summary (max 200 chars)
 Your full markdown content here (MUST be ${this.config.minWordCount}+ words)
 
 CRITICAL REMINDERS:
-- Write AT LEAST ${this.config.minWordCount} words (excluding code blocks)
-- Be comprehensive and detailed - this is an in-depth technical article
-- Include substantial explanations, not just code
-- Each section should teach something valuable
-- Do not rush to the conclusion - explore the topic thoroughly
+⚠️ MINIMUM ${this.config.minWordCount} WORDS (excluding code blocks)
+⚠️ This is a FULL article, NOT a summary
+⚠️ Each paragraph should be 3-5 sentences minimum
+⚠️ Explain concepts step-by-step, don't skip details
+⚠️ Include extensive examples and explanations
 
-Begin writing now.`;
+Begin writing now. Remember: DETAILED, COMPREHENSIVE, MINIMUM ${this.config.minWordCount} WORDS.`;
   }
 
   private countWords(text: string): number {
     // 코드 블록 제외하고 단어 수 계산
     const withoutCodeBlocks = text.replace(/```[\s\S]*?```/g, '');
-    const words = withoutCodeBlocks.match(/\b\w+\b/g);
-    return words ? words.length : 0;
+
+    // 한글과 영어 모두 지원하는 단어 카운트
+    // 공백, 구두점으로 분리된 단위를 세기
+    const tokens = withoutCodeBlocks
+      .split(/[\s\n\r\t,.!?;:()[\]{}'"]+/)
+      .filter(token => token.length > 0);
+
+    return tokens.length;
   }
 
   private parseDelimitedResponse(responseText: string): {

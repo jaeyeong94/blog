@@ -48,6 +48,8 @@ export class TopicGenerator {
 
 Your task: Suggest ONE compelling, in-depth technical topic for a blog post.
 
+NOTE: This blog will be translated to Korean later, but generate the topic in ENGLISH first.
+
 Categories available: ${categories}
 
 Requirements:
@@ -67,9 +69,9 @@ Requirements:
 
 3. Return your suggestion as JSON with this exact structure:
 {
-  "title": "Engaging title that promises value",
+  "title": "Engaging title in English that promises value",
   "category": "One of: RUST, GO, FRONTEND, DEVOPS, DATABASE",
-  "tags": ["3-5 specific tags"],
+  "tags": ["3-5 specific tags in English"],
   "outline": [
     "Introduction section",
     "Main point 1",
