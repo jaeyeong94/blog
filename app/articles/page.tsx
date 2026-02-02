@@ -17,6 +17,7 @@ export default function ArticlesPage() {
     FRONTEND: '#10b981',
     DEVOPS: '#a78bfa',
     DATABASE: '#60a5fa',
+    LIFE: '#ec4899',
   };
 
   return (

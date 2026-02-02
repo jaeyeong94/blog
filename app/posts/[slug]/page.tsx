@@ -151,6 +151,7 @@ function getCategoryColor(category: string): string {
     FRONTEND: '#61dafb',
     DEVOPS: '#4caf50',
     DATABASE: '#336791',
+    LIFE: '#ec4899',
   };
   return colors[category] || '#7eb8ff';
 }

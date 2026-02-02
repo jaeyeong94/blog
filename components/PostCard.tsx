@@ -8,6 +8,7 @@ const getCategoryColor = (category: string) => {
     FRONTEND: { bg: 'rgba(16, 185, 129, 0.15)', text: '#10b981' },
     DEVOPS: { bg: 'rgba(139, 92, 246, 0.15)', text: '#a78bfa' },
     DATABASE: { bg: 'rgba(59, 130, 246, 0.15)', text: '#60a5fa' },
+    LIFE: { bg: 'rgba(236, 72, 153, 0.15)', text: '#ec4899' },
   };
   return colors[category] || { bg: 'rgba(201, 168, 124, 0.15)', text: '#c9a87c' };
 };
