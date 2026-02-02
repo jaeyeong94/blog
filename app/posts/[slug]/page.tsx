@@ -1,8 +1,5 @@
 import { notFound } from 'next/navigation';
-import { serialize } from 'next-mdx-remote/serialize';
 import { getPostBySlug } from '@/lib/posts';
-import remarkGfm from 'remark-gfm';
-import rehypeSlug from 'rehype-slug';
 import MDXContent from '@/components/MDXContent';
 import Comments from '@/components/Comments';
 import { extractTocFromMdx } from '@/lib/toc';
@@ -22,13 +19,6 @@ export default async function PostPage({
   if (!post) {
     notFound();
   }
-
-  const mdxSource = await serialize(post.content, {
-    mdxOptions: {
-      remarkPlugins: [remarkGfm],
-      rehypePlugins: [rehypeSlug],
-    },
-  });
 
   const tocItems = extractTocFromMdx(post.content);
   const postUrl = `${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3001'}/posts/${slug}`;
@@ -104,7 +94,7 @@ export default async function PostPage({
         >
           {/* Content */}
           <div className="text-base leading-relaxed text-text">
-            <MDXContent source={mdxSource} />
+            <MDXContent source={post.content} />
           </div>
 
           {/* Tags */}

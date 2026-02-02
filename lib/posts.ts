@@ -58,7 +58,9 @@ export function getAllPosts(): PostMetadata[] {
 
 export function getPostBySlug(slug: string): Post | null {
   try {
-    const fullPath = path.join(postsDirectory, `${slug}.mdx`);
+    // URL에서 percent-encoded된 한글 디코딩
+    const decodedSlug = decodeURIComponent(slug);
+    const fullPath = path.join(postsDirectory, `${decodedSlug}.mdx`);
     const fileContents = fs.readFileSync(fullPath, 'utf8');
     const { data, content } = matter(fileContents);
     const { text } = readingTime(content);
