@@ -2,21 +2,31 @@ import Link from 'next/link';
 
 export default function Footer() {
   return (
-    <footer className="relative z-[1] border-t border-[rgba(126,184,255,0.08)] mt-10">
-      <div className="max-w-[1200px] mx-auto px-8 py-10 flex justify-between items-center">
-        <span className="font-mono text-xs text-textDim">
-          © 2024 Observatory · Built with curiosity
-        </span>
-        <div className="flex gap-5 text-[13px]">
-          {['GitHub', 'Twitter', 'RSS'].map((link) => (
-            <Link
-              key={link}
-              href={`#${link.toLowerCase()}`}
-              className="text-textMuted hover:text-accent transition-colors"
-            >
-              {link}
-            </Link>
-          ))}
+    <footer className="relative z-[1] border-t border-[#2a2725] mt-16 bg-[#151312]">
+      <div className="max-w-[1400px] mx-auto px-6 lg:px-8 py-10">
+        <div className="flex flex-col md:flex-row justify-between items-center gap-6">
+          {/* Copyright */}
+          <span className="text-sm text-[#5c5450]">
+            © 2024 불편하면 자세를 고쳐앉아
+          </span>
+
+          {/* Links */}
+          <div className="flex items-center gap-6">
+            {[
+              { name: 'GitHub', href: 'https://github.com/jaeyeong94' },
+              { name: 'Twitter', href: 'https://x.com/ted_ryu_o' },
+              { name: 'RSS', href: '/rss.xml' },
+            ].map((link) => (
+              <Link
+                key={link.name}
+                href={link.href}
+                className="text-sm text-[#5c5450] hover:text-[#c9a87c] transition-colors"
+                target={link.href.startsWith('http') ? '_blank' : undefined}
+              >
+                {link.name}
+              </Link>
+            ))}
+          </div>
         </div>
       </div>
     </footer>

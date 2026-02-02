@@ -43,3 +43,4 @@ next-env.d.ts
 # auto-post logs
 /logs/auto-post/*.log
 /scripts/auto-post/dist/
+.open-next/

@@ -17,109 +17,156 @@ export default function HomePage({ initialPosts, categories }: HomePageProps) {
     ? initialPosts
     : initialPosts.filter(post => post.category === activeCategory);
 
+  const featuredPost = initialPosts.find(post => post.featured);
+
   return (
-    <div className="max-w-[1200px] mx-auto px-8 py-12">
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-12">
-        {/* Left Column */}
-        <div>
-          {/* Hero */}
-          <section className="mb-12 animate-[fadeInUp_0.6s_ease]">
-            <div className="inline-flex items-center gap-2 px-3.5 py-2 bg-accent/10 rounded-md mb-5">
-              <span className="w-1.5 h-1.5 rounded-full bg-accent" />
-              <span className="font-mono text-[11px] text-accent font-medium">
-                EXPLORING THE DEPTHS
-              </span>
-            </div>
-
-            <h1
-              className="text-[42px] font-semibold leading-tight tracking-tight mb-5 bg-clip-text text-transparent bg-gradient-to-br from-text to-accent"
-              style={{
-                backgroundSize: '200% 200%',
-                animation: 'gradientShift 6s ease infinite',
-              }}
-            >
-              기술의 깊은 곳을<br />탐험합니다
-            </h1>
-
-            <p className="text-base text-textMuted leading-relaxed max-w-[460px]">
-              복잡한 시스템의 본질을 파헤치고, 실무에서 바로 적용할 수 있는 인사이트를 공유합니다.
-            </p>
-          </section>
-
-          {/* Category Filter */}
-          <CategoryFilter
-            categories={categories}
-            activeCategory={activeCategory}
-            onCategoryChange={setActiveCategory}
-          />
-
-          {/* Posts */}
-          <div className="flex flex-col gap-4">
-            {filteredPosts.map((post, idx) => (
-              <div
-                key={post.slug}
-                style={{
-                  animation: `fadeInUp 0.5s ease ${idx * 0.08}s both`,
-                }}
-              >
-                <PostCard post={post} />
-              </div>
-            ))}
-
-            {filteredPosts.length === 0 && (
-              <div className="text-center py-20 text-textMuted">
-                <p>아직 글이 없습니다.</p>
-              </div>
-            )}
+    <div className="max-w-[1400px] mx-auto px-6 lg:px-8 py-10">
+      {/* 3-Column Layout */}
+      <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr_280px] gap-8">
+        
+        {/* Left Sidebar - Categories & Tags */}
+        <aside className="hidden lg:block space-y-6">
+          {/* Categories */}
+          <div className="paper-card p-5">
+            <h3 className="text-xs font-semibold text-[#7a7068] uppercase tracking-wider mb-4">
+              Categories
+            </h3>
+            <nav className="space-y-1">
+              {['ALL', ...categories].map((cat) => (
+                <button
+                  key={cat}
+                  onClick={() => setActiveCategory(cat)}
+                  className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-all ${
+                    activeCategory === cat
+                      ? 'bg-[#b8956a] text-white font-medium'
+                      : 'text-[#9c9080] hover:bg-[#252220] hover:text-[#f0ebe4]'
+                  }`}
+                >
+                  {cat}
+                </button>
+              ))}
+            </nav>
           </div>
-        </div>
 
-        {/* Right Column - Sidebar */}
-        <aside className="flex flex-col gap-5">
+          {/* Popular Tags */}
+          <div className="paper-card p-5">
+            <h3 className="text-xs font-semibold text-[#7a7068] uppercase tracking-wider mb-4">
+              Popular Tags
+            </h3>
+            <div className="flex flex-wrap gap-2">
+              {['TypeScript', 'Rust', 'Docker', 'AWS', 'React', 'Go'].map((tag) => (
+                <span
+                  key={tag}
+                  className="px-2.5 py-1 bg-[#252220] rounded-md text-xs text-[#9c9080] font-medium cursor-pointer hover:bg-[#2a2725] hover:text-[#c9a87c] transition-colors"
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
+          </div>
+        </aside>
+
+        {/* Main Content */}
+        <main>
+          {/* Featured Post */}
+          {featuredPost && (
+            <section className="mb-10">
+              <div className="paper-card overflow-hidden">
+                <div className="p-6 lg:p-8">
+                  <span className="inline-block px-2 py-1 bg-[#d4a574]/20 text-[#d4a574] text-xs font-semibold rounded mb-4">
+                    Featured
+                  </span>
+                  <h2 className="text-xl lg:text-2xl font-bold text-[#f0ebe4] mb-3 hover:text-[#c9a87c] transition-colors cursor-pointer">
+                    <a href={`/posts/${featuredPost.slug}`}>{featuredPost.title}</a>
+                  </h2>
+                  <p className="text-[#9c9080] text-sm leading-relaxed mb-4 line-clamp-2">
+                    {featuredPost.excerpt}
+                  </p>
+                  <div className="flex items-center gap-4 text-xs text-[#7a7068]">
+                    <span>{featuredPost.date}</span>
+                    <span>·</span>
+                    <span>{featuredPost.readTime}</span>
+                    <span>·</span>
+                    <span className="text-[#c9a87c]">{featuredPost.category}</span>
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {/* Mobile Category Filter */}
+          <div className="lg:hidden mb-6">
+            <CategoryFilter
+              categories={categories}
+              activeCategory={activeCategory}
+              onCategoryChange={setActiveCategory}
+            />
+          </div>
+
+          {/* Posts Grid */}
+          <section>
+            <h2 className="text-lg font-semibold text-[#f0ebe4] mb-6">Latest Articles</h2>
+            <div className="grid gap-5">
+              {filteredPosts.map((post, idx) => (
+                <div
+                  key={post.slug}
+                  className="animate-fade-in-up"
+                  style={{ animationDelay: `${idx * 50}ms` }}
+                >
+                  <PostCard post={post} />
+                </div>
+              ))}
+
+              {filteredPosts.length === 0 && (
+                <div className="text-center py-16 text-[#7a7068]">
+                  <p>아직 글이 없습니다.</p>
+                </div>
+              )}
+            </div>
+          </section>
+        </main>
+
+        {/* Right Sidebar - Newsletter & Ads */}
+        <aside className="hidden lg:block space-y-6">
           {/* Newsletter */}
-          <div className="p-6 bg-bgCard rounded-xl border border-[rgba(126,184,255,0.08)]">
-            <div className="w-11 h-11 rounded-lg bg-accent/10 flex items-center justify-center mb-4 text-xl">
+          <div className="paper-card p-5">
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-[#b8956a] to-[#8b6d48] flex items-center justify-center mb-4 text-white text-lg">
               ✉
             </div>
 
-            <h3 className="text-[15px] font-semibold mb-2">
-              뉴스레터
+            <h3 className="text-base font-semibold text-[#f0ebe4] mb-2">
+              뉴스레터 구독
             </h3>
-            <p className="text-[13px] text-textMuted mb-4 leading-relaxed">
+            <p className="text-sm text-[#7a7068] mb-4 leading-relaxed">
               매주 엄선된 기술 인사이트를 받아보세요
             </p>
 
             <input
               type="email"
               placeholder="your@email.com"
-              className="w-full px-3.5 py-3 rounded-md border border-[rgba(126,184,255,0.08)] bg-bg text-text text-[13px] mb-2.5 focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+              className="w-full px-3 py-2.5 rounded-lg border border-[#2a2725] bg-[#252220] text-[#f0ebe4] text-sm mb-3 focus:outline-none focus:border-[#b8956a] focus:ring-2 focus:ring-[#b8956a]/20 transition-all placeholder:text-[#5c5450]"
             />
 
-            <button
-              className="w-full py-3 rounded-md border-none bg-gradient-to-r from-accent to-purple-400 text-white text-[13px] font-semibold cursor-pointer"
-              style={{
-                boxShadow: '0 4px 16px rgba(126, 184, 255, 0.3)',
-              }}
-            >
+            <button className="w-full py-2.5 rounded-lg bg-gradient-to-r from-[#b8956a] to-[#a68358] text-white text-sm font-semibold shadow-paper hover:shadow-paper-hover transition-all">
               구독하기
             </button>
           </div>
 
-          {/* Popular Tags */}
-          <div className="p-5 bg-bgCard rounded-xl border border-[rgba(126,184,255,0.08)]">
-            <h4 className="font-mono text-[11px] font-medium text-textDim mb-3.5">
-              POPULAR TAGS
-            </h4>
-            <div className="flex flex-wrap gap-2">
-              {['TypeScript', 'Docker', 'AWS', 'PostgreSQL', 'React', 'Rust', 'Go', 'K8s'].map((tag) => (
-                <span
-                  key={tag}
-                  className="px-3 py-1.5 bg-bgElevated rounded text-xs text-textMuted font-mono cursor-pointer hover:text-accent transition-colors"
-                >
-                  {tag}
-                </span>
-              ))}
+          {/* Ad Placeholder */}
+          <div className="paper-card p-5">
+            <div className="aspect-[4/3] rounded-lg bg-[#252220] flex items-center justify-center border border-[#2a2725]">
+              <span className="text-xs text-[#5c5450]">Ad Space</span>
             </div>
+          </div>
+
+          {/* About */}
+          <div className="paper-card p-5">
+            <h3 className="text-xs font-semibold text-[#7a7068] uppercase tracking-wider mb-3">
+              About
+            </h3>
+            <p className="text-sm text-[#9c9080] leading-relaxed">
+              풀스택 개발자 Ted의 기술 블로그입니다. 웹 개발, 시스템 설계, 자동화에 대해 씁니다.
+            </p>
           </div>
         </aside>
       </div>

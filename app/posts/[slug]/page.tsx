@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation';
 import { serialize } from 'next-mdx-remote/serialize';
-import { getAllPosts, getPostBySlug } from '@/lib/posts';
+import { getPostBySlug } from '@/lib/posts';
 import remarkGfm from 'remark-gfm';
 import rehypeSlug from 'rehype-slug';
 import MDXContent from '@/components/MDXContent';
@@ -8,12 +8,8 @@ import Comments from '@/components/Comments';
 import { extractTocFromMdx } from '@/lib/toc';
 import ArticleLayout from '@/components/ArticleLayout';
 
-export async function generateStaticParams() {
-  const posts = getAllPosts();
-  return posts.map((post) => ({
-    slug: post.slug,
-  }));
-}
+// 동적 렌더링으로 전환 (prerender 스킵)
+export const dynamic = 'force-dynamic';
 
 export default async function PostPage({
   params,

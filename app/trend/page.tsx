@@ -1,7 +1,7 @@
 import { getAllPosts, getAllCategories } from '@/lib/posts';
 import Link from 'next/link';
 
-export default function ArticlesPage() {
+export default function TrendPage() {
   const allPosts = getAllPosts();
   const categories = getAllCategories();
 
@@ -23,9 +23,9 @@ export default function ArticlesPage() {
     <div className="max-w-[1200px] mx-auto px-6 lg:px-8 py-12">
       {/* Header */}
       <div className="mb-12">
-        <h1 className="text-3xl font-bold text-[#f0ebe4] mb-4">Articles</h1>
+        <h1 className="text-3xl font-bold text-[#f0ebe4] mb-4">Trend</h1>
         <p className="text-[#9c9080]">
-          카테고리별로 정리된 모든 글 ({allPosts.length}개)
+          트렌드 기술과 인사이트 ({allPosts.length}개)
         </p>
       </div>
 

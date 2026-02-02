@@ -1,14 +1,12 @@
 import type { Metadata } from 'next';
 import './globals.css';
-import StarField from '@/components/StarField';
-import AmbientGlow from '@/components/AmbientGlow';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
 import { getAllPosts } from '@/lib/posts';
 
 export const metadata: Metadata = {
-  title: 'Observatory - Tech Blog',
-  description: '기술의 깊은 곳을 탐험합니다',
+  title: '불편하면 자세를 고쳐앉아',
+  description: '개발하다 불편하면 자세를 고쳐앉아',
 };
 
 export default function RootLayout({
@@ -21,10 +19,8 @@ export default function RootLayout({
   return (
     <html lang="ko">
       <body className="antialiased min-h-screen relative">
-        <StarField />
-        <AmbientGlow />
         <Header allPosts={allPosts} />
-        <main className="relative z-[1]">
+        <main className="relative z-[1] min-h-[calc(100vh-160px)]">
           {children}
         </main>
         <Footer />

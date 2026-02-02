@@ -14,16 +14,16 @@ export default function CategoryFilter({
   const allCategories = ['ALL', ...categories];
 
   return (
-    <div className="flex gap-2 mb-7 flex-wrap">
+    <div className="flex gap-2 flex-wrap">
       {allCategories.map((cat) => (
         <button
           key={cat}
           onClick={() => onCategoryChange(cat)}
-          className={`px-4 py-2.5 rounded-md border text-xs font-medium font-mono transition-all
+          className={`px-3 py-2 rounded-lg text-xs font-medium transition-all
             ${
               activeCategory === cat
-                ? 'border-accent bg-accent/10 text-accent'
-                : 'border-[rgba(126,184,255,0.08)] bg-transparent text-textMuted hover:bg-accent/10 hover:text-accent hover:border-accent/50'
+                ? 'bg-[#b8956a] text-white shadow-paper'
+                : 'bg-[#201d1b] border border-[#2a2725] text-[#9c9080] hover:bg-[#252220] hover:text-[#f0ebe4]'
             }`}
         >
           {cat}
