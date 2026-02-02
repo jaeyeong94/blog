@@ -6,22 +6,18 @@
     "dev": "next dev -p 3001",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
-    "auto-post": "tsx scripts/auto-post/index.ts",
-    "auto-post:no-git": "AUTO_COMMIT=false tsx scripts/auto-post/index.ts"
+    "lint": "next lint"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.71.2",
     "@mdx-js/loader": "^3.1.1",
     "@mdx-js/react": "^3.1.1",
     "@next/mdx": "^16.0.10",
     "@types/mdx": "^2.0.13",
     "@types/react-syntax-highlighter": "^15.5.13",
-    "dotenv": "^17.2.3",
     "gray-matter": "^4.0.3",
     "next": "^16.0.10",
     "next-mdx-remote": "^5.0.0",
