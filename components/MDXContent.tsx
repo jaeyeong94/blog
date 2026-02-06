@@ -1,10 +1,30 @@
 import { MDXRemote } from 'next-mdx-remote/rsc';
 import remarkGfm from 'remark-gfm';
 import rehypeSlug from 'rehype-slug';
+import rehypePrettyCode from 'rehype-pretty-code';
+import type { Options } from 'rehype-pretty-code';
 
 interface MDXContentProps {
   source: string;
 }
+
+const prettyCodeOptions: Options = {
+  theme: 'one-dark-pro',
+  keepBackground: true,
+  defaultLang: 'plaintext',
+  onVisitLine(node) {
+    // 빈 라인에도 최소 높이 유지
+    if (node.children.length === 0) {
+      node.children = [{ type: 'text', value: ' ' }];
+    }
+  },
+  onVisitHighlightedLine(node) {
+    node.properties.className = ['highlighted'];
+  },
+  onVisitHighlightedChars(node) {
+    node.properties.className = ['highlighted-chars'];
+  },
+};
 
 const components = {
   h1: (props: any) => (
@@ -36,19 +56,18 @@ const components = {
   p: (props: any) => (
     <p className="mb-4.5 text-textMuted leading-relaxed" {...props} />
   ),
-  pre: (props: any) => (
-    <pre
-      className="bg-bgCode rounded-lg overflow-x-auto border border-[rgba(126,184,255,0.08)] mb-6 p-4"
-      {...props}
-    />
+  // pre와 code는 rehype-pretty-code가 처리하므로 기본 스타일만
+  pre: ({ children, ...props }: any) => (
+    <pre {...props}>{children}</pre>
   ),
   code: ({ children, className, ...props }: any) => {
-    const isBlock = className?.includes('language-');
+    // 인라인 코드 (className이 없는 경우)
+    const isInline = !className;
     
-    if (!isBlock) {
+    if (isInline) {
       return (
         <code
-          className="font-mono text-[0.88em] bg-bgElevated px-1.5 py-0.5 rounded border border-[rgba(126,184,255,0.08)] text-[#82aaff]"
+          className="font-mono text-[0.88em] bg-bgElevated px-1.5 py-0.5 rounded border border-[rgba(126,184,255,0.08)] text-[#e5c07b]"
           {...props}
         >
           {children}
@@ -57,10 +76,7 @@ const components = {
     }
 
     return (
-      <code
-        className="font-mono text-[13px] leading-relaxed text-[#c9d1d9]"
-        {...props}
-      >
+      <code className={className} {...props}>
         {children}
       </code>
     );
@@ -115,7 +131,10 @@ export default function MDXContent({ source }: MDXContentProps) {
         options={{
           mdxOptions: {
             remarkPlugins: [remarkGfm],
-            rehypePlugins: [rehypeSlug],
+            rehypePlugins: [
+              rehypeSlug,
+              [rehypePrettyCode, prettyCodeOptions],
+            ],
           },
         }}
       />
