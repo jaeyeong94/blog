@@ -1,0 +1,595 @@
+---
+title: 'Kubernetes Gateway API와 Envoy Gateway로 프로덕션 트래픽 관리 현대화하기'
+excerpt: 'Kubernetes Ingress의 한계를 넘어 Gateway API와 Envoy Gateway를 활용해 프로덕션 환경에서 세밀한 트래픽 관리, 카나리 배포, 레이트 리미팅을 구현하는 방법을 실전 예제와 함께 알아봅니다.'
+date: '2026-02-10'
+category: 'DEVOPS'
+tags: ['Kubernetes', 'Gateway API', 'Envoy', 'Traffic Management', 'Cloud Native']
+featured: false
+---
+
+# Kubernetes Gateway API와 Envoy Gateway로 프로덕션 트래픽 관리 현대화하기
+
+## 들어가며
+
+Kubernetes가 컨테이너 오케스트레이션의 사실상 표준이 된 지 오래되었지만, 외부 트래픽을 클러스터 내부 서비스로 라우팅하는 문제는 여전히 많은 팀에게 골칫거리입니다. 기존의 Ingress 리소스는 단순한 HTTP 라우팅에는 충분했지만, 마이크로서비스 아키텍처가 복잡해지면서 한계가 뚜렷해졌습니다. 헤더 기반 라우팅, 트래픽 분할, 요청 미러링 같은 고급 기능을 사용하려면 어노테이션 지옥에 빠지거나, 특정 Ingress 컨트롤러에 종속되는 상황이 반복되었습니다.
+
+이런 문제를 해결하기 위해 Kubernetes SIG-Network에서 Gateway API를 설계했습니다. Gateway API는 2023년에 GA(Generally Available)가 되었고, 2025년에는 GEP-1731(Gateway API for Mesh), GEP-1742(HTTPRoute Timeouts), BackendTLSPolicy 등 핵심 기능들이 추가되면서 프로덕션 환경에서 본격적으로 채택되기 시작했습니다. CNCF의 2025 서베이에 따르면, 신규 Kubernetes 배포의 약 40%가 Ingress 대신 Gateway API를 선택하고 있으며, 이 수치는 빠르게 증가하고 있습니다.
+
+이 포스트에서는 Gateway API의 아키텍처를 깊이 이해하고, Envoy Gateway를 구현체로 사용해 프로덕션 수준의 트래픽 관리 시스템을 구축하는 과정을 단계별로 다룹니다. 단순한 "Hello World" 수준이 아니라, 카나리 배포, 레이트 리미팅, mTLS, 요청 미러링까지 실전에서 필요한 패턴들을 코드와 함께 살펴보겠습니다.
+
+## Ingress의 한계: 왜 Gateway API가 필요한가
+
+Kubernetes Ingress 리소스가 처음 소개된 것은 2015년이었습니다. 당시에는 "외부 HTTP 트래픽을 내부 서비스로 보낸다"는 단순한 요구사항을 해결하는 것이 목적이었고, 그 역할은 충분히 수행했습니다. 하지만 시간이 지나면서 Ingress의 구조적 한계가 드러났습니다.
+
+첫 번째 문제는 **표현력의 부족**입니다. Ingress 스펙은 호스트 기반 라우팅과 경로 기반 라우팅만 지원합니다. 헤더 매칭, 쿼리 파라미터 기반 라우팅, 트래픽 가중치 분배 같은 기능이 스펙에 없습니다. 결국 각 Ingress 컨트롤러(NGINX, Traefik, HAProxy 등)가 자체 어노테이션으로 이를 구현했고, 이는 벤더 종속성을 만들었습니다.
+
+```yaml
+# Ingress에서의 어노테이션 지옥 - NGINX 컨트롤러 전용
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: my-app
+  annotations:
+    # NGINX 전용 어노테이션들 - 다른 컨트롤러로 이식 불가
+    nginx.ingress.kubernetes.io/canary: "true"
+    nginx.ingress.kubernetes.io/canary-weight: "20"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://example.com"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+spec:
+  rules:
+    - host: api.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: my-app
+                port:
+                  number: 8080
+```
+
+두 번째 문제는 **역할 분리의 부재**입니다. Ingress는 인프라 관리자(클러스터 운영자)와 애플리케이션 개발자의 책임을 구분하지 않습니다. 로드밸런서 설정, TLS 인증서 관리, 라우팅 규칙이 모두 하나의 리소스에 뒤섞여 있어서, 누가 무엇을 관리해야 하는지 모호합니다. 대규모 조직에서 수백 개의 서비스를 운영할 때 이는 심각한 운영 부담으로 이어집니다.
+
+세 번째 문제는 **TCP/UDP 지원 부재**입니다. Ingress는 순수 HTTP/HTTPS 전용입니다. gRPC, 데이터베이스 연결, 메시지 큐 같은 non-HTTP 프로토콜은 별도의 Service(LoadBalancer 타입)를 만들어야 했고, 이는 클라우드 비용 증가와 관리 복잡성을 의미합니다.
+
+## Gateway API 아키텍처 심층 분석
+
+Gateway API는 이러한 문제를 **역할 기반 리소스 모델**로 해결합니다. 핵심은 세 가지 계층으로 나뉜 리소스 구조입니다.
+
+**GatewayClass**는 인프라 제공자가 관리합니다. 어떤 종류의 게이트웨이를 사용할 수 있는지 정의하며, 클라우드 프로바이더나 플랫폼 팀이 설정합니다. StorageClass와 유사한 개념입니다.
+
+**Gateway**는 클러스터 운영자가 관리합니다. 실제 로드밸런서 인스턴스를 나타내며, 어떤 포트에서 어떤 프로토콜로 트래픽을 받을지, TLS 설정은 어떻게 할지를 정의합니다.
+
+**HTTPRoute, GRPCRoute, TCPRoute, TLSRoute**는 애플리케이션 개발자가 관리합니다. 트래픽이 어디로 가야 하는지, 어떤 조건에서 어떻게 라우팅되는지를 정의합니다.
+
+```yaml
+# 1단계: GatewayClass - 인프라 제공자가 설정
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: envoy-gateway
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: custom-proxy-config
+    namespace: envoy-gateway-system
+---
+# 2단계: Gateway - 클러스터 운영자가 설정
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: production-gateway
+  namespace: infra
+spec:
+  gatewayClassName: envoy-gateway
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: 443
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: wildcard-tls
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              gateway-access: "true"
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Same
+---
+# 3단계: HTTPRoute - 애플리케이션 개발자가 설정
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: api-routes
+  namespace: app-team-a
+spec:
+  parentRefs:
+    - name: production-gateway
+      namespace: infra
+  hostnames:
+    - "api.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /v2/users
+          headers:
+            - name: X-API-Version
+              value: "2"
+      backendRefs:
+        - name: users-service-v2
+          port: 8080
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /v1/users
+      backendRefs:
+        - name: users-service-v1
+          port: 8080
+```
+
+이 구조가 강력한 이유는 **관심사의 분리(Separation of Concerns)**가 API 레벨에서 강제된다는 점입니다. 플랫폼 팀은 GatewayClass와 Gateway만 관리하고, 개발 팀은 자기 네임스페이스의 Route만 관리합니다. RBAC과 결합하면 각 팀이 자기 영역만 수정할 수 있도록 제한할 수 있어서, 대규모 조직에서의 운영이 훨씬 안전해집니다.
+
+> **중요:** Gateway API의 `allowedRoutes.namespaces` 설정은 단순한 편의 기능이 아니라 보안 경계입니다. 이를 통해 어떤 네임스페이스의 Route가 Gateway에 바인딩될 수 있는지 명시적으로 제어할 수 있습니다. 프로덕션에서는 반드시 `Selector`를 사용해 허용된 네임스페이스를 제한하세요.
+
+## Envoy Gateway 설치와 초기 설정
+
+Envoy Gateway는 Envoy Proxy를 기반으로 한 Gateway API 구현체입니다. Envoy 자체가 이미 대규모 프로덕션 환경(Lyft, Google, Salesforce 등)에서 검증된 프록시이므로, 안정성과 성능 면에서 신뢰할 수 있습니다. 2025년 현재 v1.2가 릴리즈되었으며, Gateway API v1.1 스펙을 완전히 지원합니다.
+
+Helm을 사용한 설치가 가장 권장됩니다:
+
+```bash
+# Envoy Gateway Helm 차트 추가
+helm repo add envoy-gateway https://charts.envoyproxy.io
+helm repo update
+
+# 네임스페이스 생성 및 설치
+kubectl create namespace envoy-gateway-system
+
+helm install envoy-gateway envoy-gateway/gateway-helm \
+  --namespace envoy-gateway-system \
+  --version v1.2.0 \
+  --set config.envoyGateway.logging.level.default=info \
+  --set deployment.replicas=2 \
+  --set deployment.pod.resources.requests.cpu=200m \
+  --set deployment.pod.resources.requests.memory=256Mi \
+  --set deployment.pod.resources.limits.cpu=500m \
+  --set deployment.pod.resources.limits.memory=512Mi
+```
+
+설치 후 Envoy Gateway가 자동으로 GatewayClass를 생성합니다. 프로덕션 환경에서는 EnvoyProxy 커스텀 리소스를 통해 세부 설정을 조정하는 것이 좋습니다:
+
+```yaml
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: custom-proxy-config
+  namespace: envoy-gateway-system
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        replicas: 3
+        pod:
+          annotations:
+            prometheus.io/scrape: "true"
+            prometheus.io/port: "19001"
+          affinity:
+            podAntiAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+                - weight: 100
+                  podAffinityTerm:
+                    labelSelector:
+                      matchExpressions:
+                        - key: app
+                          operator: In
+                          values:
+                            - envoy
+                    topologyKey: kubernetes.io/hostname
+        container:
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+  telemetry:
+    metrics:
+      prometheus:
+        enable: true
+    accessLog:
+      settings:
+        - format:
+            type: JSON
+            json:
+              startTime: "%START_TIME%"
+              method: "%REQ(:METHOD)%"
+              path: "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%"
+              protocol: "%PROTOCOL%"
+              responseCode: "%RESPONSE_CODE%"
+              duration: "%DURATION%"
+              bytesReceived: "%BYTES_RECEIVED%"
+              bytesSent: "%BYTES_SENT%"
+              upstreamHost: "%UPSTREAM_HOST%"
+              requestId: "%REQ(X-REQUEST-ID)%"
+```
+
+> **성능 팁:** Envoy Gateway의 데이터 플레인(Envoy Proxy 인스턴스)은 Gateway당 별도로 생성됩니다. 고트래픽 환경에서는 replicas를 3 이상으로 설정하고, HPA(Horizontal Pod Autoscaler)를 연결하는 것을 권장합니다. Envoy는 CPU 바운드 워크로드이므로 CPU 리소스가 가장 중요합니다.
+
+## 카나리 배포: 트래픽 가중치 분배
+
+프로덕션에서 새 버전을 안전하게 배포하는 가장 효과적인 방법 중 하나가 카나리 배포입니다. Gateway API에서는 `backendRefs`의 `weight` 필드를 통해 네이티브로 지원합니다. Ingress에서 어노테이션으로 해결하던 것을 이제 표준 API로 할 수 있습니다.
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: payment-service-canary
+  namespace: payments
+spec:
+  parentRefs:
+    - name: production-gateway
+      namespace: infra
+  hostnames:
+    - "api.example.com"
+  rules:
+    # 카나리 규칙: 특정 헤더가 있으면 항상 v2로
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/payments
+          headers:
+            - name: X-Canary
+              value: "true"
+      backendRefs:
+        - name: payment-service-v2
+          port: 8080
+          weight: 1
+    # 기본 규칙: 가중치 기반 분배
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/payments
+      backendRefs:
+        - name: payment-service-v1
+          port: 8080
+          weight: 90
+        - name: payment-service-v2
+          port: 8080
+          weight: 10
+```
+
+이 설정은 두 가지 전략을 동시에 적용합니다. 먼저, `X-Canary: true` 헤더를 가진 요청은 항상 v2로 라우팅됩니다. 이를 통해 QA 팀이나 내부 테스터가 새 버전을 먼저 검증할 수 있습니다. 나머지 일반 트래픽은 90:10으로 분배되어, 전체 사용자의 10%만 새 버전을 경험합니다.
+
+카나리 배포를 점진적으로 진행하려면 weight를 단계적으로 조정합니다. 자동화 파이프라인에서 이를 수행하는 스크립트 예시입니다:
+
+```bash
+#!/bin/bash
+# 카나리 가중치를 점진적으로 증가시키는 스크립트
+# 사용법: ./canary-promote.sh <namespace> <route-name> <step>
+
+NAMESPACE=$1
+ROUTE=$2
+STEP=${3:-10}  # 기본 10% 증가
+
+# 현재 v2 가중치 조회
+CURRENT_V2_WEIGHT=$(kubectl get httproute $ROUTE -n $NAMESPACE \
+  -o jsonpath='{.spec.rules[1].backendRefs[1].weight}')
+
+NEW_V2_WEIGHT=$((CURRENT_V2_WEIGHT + STEP))
+NEW_V1_WEIGHT=$((100 - NEW_V2_WEIGHT))
+
+if [ $NEW_V2_WEIGHT -gt 100 ]; then
+  echo "이미 100% 도달. 전체 전환 완료."
+  exit 0
+fi
+
+echo "가중치 변경: v1=$NEW_V1_WEIGHT%, v2=$NEW_V2_WEIGHT%"
+
+# JSONPatch로 가중치 업데이트
+kubectl patch httproute $ROUTE -n $NAMESPACE --type=json -p="[
+  {\"op\": \"replace\", \"path\": \"/spec/rules/1/backendRefs/0/weight\", \"value\": $NEW_V1_WEIGHT},
+  {\"op\": \"replace\", \"path\": \"/spec/rules/1/backendRefs/1/weight\", \"value\": $NEW_V2_WEIGHT}
+]"
+
+echo "✅ 카나리 가중치 업데이트 완료"
+
+# 에러율 확인 (Prometheus 연동)
+sleep 60
+ERROR_RATE=$(curl -s "http://prometheus:9090/api/v1/query?query=\
+  rate(envoy_http_downstream_rq_xx{envoy_response_code_class=\"5\",service=\"payment-service-v2\"}[5m])" \
+  | jq '.data.result[0].value[1] // "0"' -r)
+
+echo "v2 5xx 에러율: $ERROR_RATE"
+if (( $(echo "$ERROR_RATE > 0.05" | bc -l) )); then
+  echo "⚠️ 에러율 5% 초과! 롤백 권장"
+fi
+```
+
+## 레이트 리미팅: 서비스 보호
+
+프로덕션 API에서 레이트 리미팅은 선택이 아닌 필수입니다. DDoS 공격 방어뿐만 아니라, 특정 클라이언트가 과도한 요청으로 다른 사용자의 경험을 해치는 것을 방지합니다. Envoy Gateway는 `BackendTrafficPolicy`를 통해 정교한 레이트 리미팅을 제공합니다.
+
+```yaml
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: api-rate-limit
+  namespace: app-team-a
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: api-routes
+  rateLimit:
+    type: Global
+    global:
+      rules:
+        # 규칙 1: IP 기반 전역 제한
+        - clientSelectors:
+            - headers:
+                - name: X-Forwarded-For
+                  type: Distinct
+          limit:
+            requests: 100
+            unit: Minute
+        # 규칙 2: 인증된 사용자는 더 높은 제한
+        - clientSelectors:
+            - headers:
+                - name: Authorization
+                  type: Distinct
+                - name: X-Plan-Tier
+                  value: premium
+          limit:
+            requests: 1000
+            unit: Minute
+        # 규칙 3: 무인증 요청은 낮은 제한
+        - clientSelectors:
+            - headers:
+                - name: Authorization
+                  invert: true
+          limit:
+            requests: 20
+            unit: Minute
+```
+
+이 설정은 세 계층의 레이트 리미팅을 적용합니다. 인증되지 않은 요청은 분당 20회, 일반 인증 사용자는 분당 100회, 프리미엄 플랜 사용자는 분당 1000회까지 허용합니다. `type: Distinct`는 각 고유한 헤더 값(각 IP, 각 토큰)별로 독립적인 카운터를 유지한다는 의미입니다.
+
+Envoy Gateway의 레이트 리미팅은 내부적으로 Redis를 사용한 분산 카운터를 지원하므로, Envoy 인스턴스가 여러 개여도 정확한 카운팅이 가능합니다:
+
+```yaml
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyGateway
+metadata:
+  name: config
+  namespace: envoy-gateway-system
+spec:
+  rateLimit:
+    backend:
+      type: Redis
+      redis:
+        url: redis://redis-master.redis-system.svc:6379
+        tls:
+          certificateRef:
+            name: redis-client-cert
+```
+
+## 요청 미러링: 안전한 프로덕션 테스트
+
+새 버전이 실제 프로덕션 트래픽을 정상적으로 처리하는지 확인하고 싶지만, 사용자에게 영향을 주고 싶지 않을 때 요청 미러링을 사용합니다. 프로덕션 트래픽의 복사본을 새 버전으로 보내되, 응답은 기존 버전의 것만 사용자에게 전달합니다.
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: order-service-mirror
+  namespace: orders
+spec:
+  parentRefs:
+    - name: production-gateway
+      namespace: infra
+  hostnames:
+    - "api.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/orders
+      backendRefs:
+        - name: order-service-v1
+          port: 8080
+      filters:
+        - type: RequestMirror
+          requestMirror:
+            backendRef:
+              name: order-service-v2
+              port: 8080
+```
+
+미러링된 요청에 대한 응답은 클라이언트에게 전달되지 않습니다. 하지만 v2 서비스의 로그와 메트릭을 통해 새 버전이 프로덕션 트래픽 패턴에서 어떻게 동작하는지 관찰할 수 있습니다. 이는 카나리 배포 전 단계로 활용하기에 이상적입니다. 먼저 미러링으로 검증하고, 문제가 없으면 카나리 배포로 실제 트래픽을 보내는 2단계 전략을 사용하세요.
+
+> **주의:** 요청 미러링은 **모든 요청**을 복제합니다. POST, PUT, DELETE 같은 쓰기 요청도 포함됩니다. 미러 타겟이 실제 데이터베이스에 쓰기를 수행한다면, 데이터 중복이나 부작용이 발생할 수 있습니다. 미러 대상 서비스는 반드시 별도의 테스트 데이터베이스를 사용하거나, dry-run 모드로 동작하도록 구성해야 합니다.
+
+## BackendTLSPolicy: 서비스 간 mTLS 설정
+
+제로 트러스트 네트워크에서는 게이트웨이와 백엔드 서비스 간의 통신도 암호화해야 합니다. Gateway API의 `BackendTLSPolicy`를 사용하면 이를 선언적으로 설정할 수 있습니다.
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1alpha3
+kind: BackendTLSPolicy
+metadata:
+  name: payment-backend-tls
+  namespace: payments
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: payment-service-v2
+  validation:
+    caCertificateRefs:
+      - name: internal-ca-cert
+        group: ""
+        kind: ConfigMap
+    hostname: payment-service.payments.svc.cluster.local
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: internal-ca-cert
+  namespace: payments
+data:
+  ca.crt: |
+    -----BEGIN CERTIFICATE-----
+    # 내부 CA 인증서
+    -----END CERTIFICATE-----
+```
+
+이 설정은 게이트웨이가 payment-service-v2로 요청을 전달할 때, TLS 연결을 사용하고 서버 인증서를 지정된 CA로 검증하도록 합니다. 서비스 메시(Istio, Linkerd) 없이도 게이트웨이-백엔드 간 암호화를 달성할 수 있어서, 서비스 메시 도입 전 단계의 보안 강화에 유용합니다.
+
+## Observability: 메트릭과 모니터링
+
+프로덕션 트래픽 관리에서 관찰가능성은 핵심입니다. Envoy Gateway는 Prometheus 메트릭을 네이티브로 노출하며, Grafana 대시보드를 통해 실시간 모니터링이 가능합니다.
+
+주요 모니터링 메트릭과 그 의미를 살펴보겠습니다:
+
+```yaml
+# Prometheus 알림 규칙 예시
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: gateway-alerts
+  namespace: monitoring
+spec:
+  groups:
+    - name: envoy-gateway
+      rules:
+        # 5xx 에러율이 1%를 초과하면 경고
+        - alert: HighGatewayErrorRate
+          expr: |
+            sum(rate(envoy_http_downstream_rq_xx{
+              envoy_response_code_class="5"
+            }[5m])) /
+            sum(rate(envoy_http_downstream_rq_total[5m])) > 0.01
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "게이트웨이 5xx 에러율 1% 초과"
+            description: "현재 에러율: {{ $value | humanizePercentage }}"
+
+        # P99 레이턴시가 2초를 초과하면 경고
+        - alert: HighGatewayLatency
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(envoy_http_downstream_rq_time_bucket[5m])) by (le)
+            ) > 2000
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "게이트웨이 P99 레이턴시 2초 초과"
+
+        # 레이트 리미팅 발동 비율 모니터링
+        - alert: HighRateLimitRate
+          expr: |
+            sum(rate(envoy_http_downstream_rq_xx{
+              envoy_response_code="429"
+            }[5m])) /
+            sum(rate(envoy_http_downstream_rq_total[5m])) > 0.1
+          for: 5m
+          labels:
+            severity: info
+          annotations:
+            summary: "레이트 리미팅 발동률 10% 초과 - 한도 조정 검토 필요"
+```
+
+Envoy는 기본적으로 매우 풍부한 메트릭을 노출합니다. `envoy_http_downstream_rq_total`(총 요청 수), `envoy_http_downstream_rq_time`(요청 처리 시간), `envoy_http_downstream_cx_active`(활성 연결 수) 등이 핵심 지표입니다. 이를 카나리 배포의 자동 롤백 판단에 활용하면, 사람의 개입 없이도 안전한 배포가 가능합니다.
+
+## 실전 아키텍처: 멀티 팀 환경 설계
+
+대규모 조직에서 Gateway API를 도입할 때의 권장 아키텍처를 정리합니다. 핵심은 네임스페이스 기반의 격리와 RBAC의 조합입니다.
+
+```yaml
+# 플랫폼 팀: 공유 게이트웨이 설정
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: shared-gateway
+  namespace: platform
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  gatewayClassName: envoy-gateway
+  listeners:
+    - name: team-a-https
+      hostname: "*.team-a.example.com"
+      protocol: HTTPS
+      port: 443
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: team-a-wildcard-tls
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              team: "a"
+    - name: team-b-https
+      hostname: "*.team-b.example.com"
+      protocol: HTTPS
+      port: 443
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: team-b-wildcard-tls
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              team: "b"
+---
+# RBAC: 팀 A는 자기 네임스페이스의 HTTPRoute만 관리 가능
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: route-manager
+  namespace: team-a-apps
+rules:
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes", "grpcroutes"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  - apiGroups: ["gateway.envoyproxy.io"]
+    resources: ["backendtrafficpolicies"]
+    verbs: ["get", "list", "create", "update", "patch"]
+```
+
+이 구조에서 플랫폼 팀은 Gateway와 GatewayClass만 관리하고, 각 애플리케이션 팀은 자기 네임스페이스 안에서 자유롭게 Route를 추가하거나 수정할 수 있습니다. 리스너의 `hostname` 패턴과 `allowedRoutes`의 네임스페이스 셀렉터가 팀 간 격리를 보장합니다. 팀 A의 Route가 실수로 팀 B의 트래픽에 영향을 줄 수 없습니다.
+
+## 마무리
+
+Gateway API는 단순히 Ingress의 후속이 아닙니다. Kubernetes에서 트래픽을 관리하는 방식의 패러다임 전환입니다. 역할 기반 리소스 모델은 대규모 조직의 운영 복잡성을 줄이고, 표준화된 스펙은 벤더 종속성을 제거합니다. Envoy Gateway는 이 스펙을 검증된 Envoy Proxy 위에서 구현함으로써, 프로덕션 환경에서의 신뢰성을 보장합니다.
+
+오늘 다룬 카나리 배포, 레이트 리미팅, 요청 미러링, mTLS는 프로덕션 트래픽 관리의 핵심 패턴들입니다. 이 패턴들이 어노테이션이 아닌 표준 API로 표현된다는 것은, 인프라 코드의 이식성과 유지보수성이 크게 향상된다는 것을 의미합니다. 아직 Ingress를 사용하고 있다면, 신규 서비스부터 Gateway API로 전환하는 것을 적극 권장합니다. Gateway API는 이미 프로덕션 레디이며, Envoy Gateway, Istio, Cilium, Kong 등 주요 구현체들이 모두 GA 수준의 지원을 제공하고 있습니다.
+
+다음 단계로는 Argo Rollouts와 Gateway API를 연동해 완전 자동화된 프로그레시브 딜리버리 파이프라인을 구축하거나, GRPCRoute를 활용해 gRPC 서비스의 트래픽 관리를 표준화하는 것을 시도해보세요. Kubernetes 트래픽 관리의 미래는 이미 여기에 있습니다.
