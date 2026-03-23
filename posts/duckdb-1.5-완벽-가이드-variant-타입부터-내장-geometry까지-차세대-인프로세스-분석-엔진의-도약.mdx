@@ -1,0 +1,477 @@
+---
+title: 'DuckDB 1.5 완벽 가이드: VARIANT 타입부터 내장 GEOMETRY까지 차세대 인프로세스 분석 엔진의 도약'
+excerpt: 'DuckDB 1.5 "Variegata"의 핵심 신기능을 심층 분석합니다. 네이티브 VARIANT 타입, 내장 GEOMETRY, 완전히 새로워진 CLI, PEG 파서, 레이크하우스 통합까지 — 프로덕션 분석 워크로드를 위한 모든 변화를 코드와 함께 살펴봅니다.'
+date: '2026-03-23'
+category: 'DATABASE'
+tags: ['DuckDB', 'Analytics', 'VARIANT', 'GEOMETRY', 'Lakehouse']
+featured: false
+---
+
+# DuckDB 1.5 완벽 가이드: VARIANT 타입부터 내장 GEOMETRY까지 차세대 인프로세스 분석 엔진의 도약
+
+## 서론: 왜 DuckDB 1.5가 중요한가
+
+2026년 3월 9일, DuckDB 팀은 v1.5.0 "Variegata"를 공식 릴리즈했습니다. 뉴질랜드 고유종인 Paradise Shelduck(Tadorna variegata)의 이름을 딴 이번 릴리즈는 단순한 점진적 업데이트가 아닙니다. DuckDB가 단순한 "SQLite for analytics"를 넘어, 본격적인 프로덕션급 인프로세스 분석 엔진으로 자리매김하는 전환점이라 할 수 있습니다.
+
+DuckDB의 성장세는 놀랍습니다. GitHub 스타 수 30,000개를 돌파했고, PyPI에서 월간 다운로드는 수백만 건에 달합니다. MotherDuck이 클라우드 서비스를 제공하면서 엔터프라이즈 도입도 가속화되고 있죠. 이런 상황에서 1.5 릴리즈는 세 가지 핵심 방향을 제시합니다. 첫째, 반정형 데이터를 위한 네이티브 VARIANT 타입으로 Snowflake와의 호환성을 확보합니다. 둘째, GEOMETRY 타입을 코어로 편입시켜 공간 데이터 분석의 진입 장벽을 획기적으로 낮춥니다. 셋째, 완전히 새로워진 CLI와 PEG 파서로 개발자 경험을 근본적으로 개선합니다.
+
+특히 주목할 점은 DuckDB 2.0이 2026년 9월로 예정되어 있다는 것입니다. 1.5는 2.0 이전 마지막 마이너 릴리즈로, v1.4 LTS(Andium)와 함께 운영되는 듀얼 릴리즈 체계를 따릅니다. 프로덕션 환경에서 안정성이 중요하다면 1.4 LTS를, 최신 기능이 필요하다면 1.5를 선택할 수 있는 유연성을 제공하는 것이죠. 이 글에서는 DuckDB 1.5의 모든 주요 변경 사항을 실제 코드 예제와 함께 깊이 있게 살펴보겠습니다.
+
+## 네이티브 VARIANT 타입: 반정형 데이터의 새로운 패러다임
+
+### JSON을 넘어서: 왜 VARIANT인가
+
+DuckDB는 이미 JSON 타입을 지원하고 있었습니다. 하지만 JSON 타입은 본질적으로 텍스트 기반입니다. 모든 값이 문자열로 직렬화되어 저장되므로, 쿼리할 때마다 파싱 오버헤드가 발생합니다. VARIANT는 이 문제를 근본적으로 해결합니다.
+
+VARIANT 타입은 Snowflake의 반정형 VARIANT 데이터 타입에서 영감을 받았으며, 2025년부터 Apache Parquet 포맷에서도 공식 지원되는 표준 인코딩을 사용합니다. 핵심 차이점은 **타입 정보가 바이너리 형태로 각 행에 내장**된다는 것입니다. 즉, 정수는 정수로, 문자열은 문자열로, 구조체는 구조체로 저장됩니다.
+
+```sql
+-- VARIANT 컬럼에 다양한 타입의 데이터 저장
+CREATE TABLE events (id INTEGER, data VARIANT);
+INSERT INTO events VALUES
+    (1, 42::VARIANT),
+    (2, 'hello world'::VARIANT),
+    (3, [1, 2, 3]::VARIANT),
+    (4, {'name': 'Alice', 'age': 30}::VARIANT);
+
+SELECT * FROM events;
+```
+
+```
+┌───────┬────────────────────────────┐
+│  id   │            data            │
+│ int32 │          variant           │
+├───────┼────────────────────────────┤
+│     1 │ 42                         │
+│     2 │ hello world                │
+│     3 │ [1, 2, 3]                  │
+│     4 │ {'name': Alice, 'age': 30} │
+└───────┴────────────────────────────┘
+```
+
+이것이 왜 중요할까요? IoT 센서 데이터, 이벤트 로그, API 응답 등 실제 분석 워크로드에서 스키마가 일정하지 않은 데이터는 매우 흔합니다. 기존에는 이런 데이터를 JSON 문자열로 저장하고 매번 파싱했지만, VARIANT를 사용하면 네이티브 바이너리로 저장되어 압축률과 쿼리 성능 모두 크게 향상됩니다.
+
+### VARIANT의 타입 검사와 추출
+
+각 행의 실제 타입을 `variant_typeof` 함수로 확인할 수 있습니다:
+
+```sql
+-- 각 행의 실제 저장 타입 확인
+SELECT id, data, variant_typeof(data) AS vtype
+FROM events;
+```
+
+```
+┌───────┬────────────────────────────┬───────────────────┐
+│  id   │            data            │       vtype       │
+│ int32 │          variant           │      varchar      │
+├───────┼────────────────────────────┼───────────────────┤
+│     1 │ 42                         │ INT32             │
+│     2 │ hello world                │ VARCHAR           │
+│     3 │ [1, 2, 3]                  │ ARRAY(3)          │
+│     4 │ {'name': Alice, 'age': 30} │ OBJECT(name, age) │
+└───────┴────────────────────────────┴───────────────────┘
+```
+
+중첩된 VARIANT에서 필드를 추출할 때는 점 표기법이나 `variant_extract` 함수를 사용합니다:
+
+```sql
+-- 점 표기법으로 중첩 필드 접근
+SELECT data.name FROM events WHERE id = 4;
+
+-- 또는 함수 기반 추출
+SELECT variant_extract(data, 'name') AS name FROM events WHERE id = 4;
+```
+
+### 실전 활용: 이벤트 스트림 분석 파이프라인
+
+실제 프로덕션 시나리오를 살펴보겠습니다. 다양한 형태의 사용자 이벤트를 수집하고 분석하는 파이프라인입니다:
+
+```sql
+-- 이벤트 스트림 테이블 생성
+CREATE TABLE user_events (
+    event_id    BIGINT,
+    event_type  VARCHAR,
+    timestamp   TIMESTAMP,
+    payload     VARIANT
+);
+
+-- 다양한 형태의 이벤트 삽입
+INSERT INTO user_events VALUES
+    (1, 'page_view', '2026-03-23 10:00:00',
+     {'url': '/products/123', 'referrer': 'google.com', 'duration_ms': 4500}::VARIANT),
+    (2, 'purchase', '2026-03-23 10:05:00',
+     {'product_id': 123, 'amount': 29.99, 'currency': 'USD', 'items': [{'sku': 'A1', 'qty': 2}]}::VARIANT),
+    (3, 'error', '2026-03-23 10:06:00',
+     {'code': 500, 'message': 'Internal Server Error', 'stack': 'at handler.js:42'}::VARIANT);
+
+-- 타입별 분석 — JSON 파싱 없이 바이너리에서 직접 추출
+SELECT
+    event_type,
+    CASE
+        WHEN event_type = 'page_view' THEN payload.duration_ms::VARCHAR
+        WHEN event_type = 'purchase' THEN payload.amount::VARCHAR
+        WHEN event_type = 'error' THEN payload.code::VARCHAR
+    END AS key_metric
+FROM user_events;
+```
+
+> **성능 참고:** VARIANT는 바이너리 저장 방식 덕분에 JSON 대비 Parquet 파일 읽기에서 30-50% 빠른 성능을 보입니다. 특히 중첩된 구조체에서 특정 필드만 추출하는 "shredding" 기능은 전체 레코드를 디시리얼라이즈하지 않고 필요한 컬럼만 읽어오므로 대규모 데이터셋에서 차이가 극적으로 벌어집니다.
+
+DuckDB는 Parquet 파일에서 VARIANT 타입을 직접 읽는 것도 지원하며, Delta Lake과 DuckLake 확장에서도 이미 VARIANT를 구현했습니다. Iceberg의 VARIANT 지원은 v1.5.1에서 Iceberg v3 스펙과 함께 제공될 예정입니다.
+
+## 완전히 새로워진 CLI: 터미널에서의 분석 경험 혁신
+
+### 컬러 스킴과 다이내믹 프롬프트
+
+DuckDB 1.5의 CLI 리워크는 단순한 "예쁘게 만들기"가 아닙니다. 분석가가 터미널에서 보내는 시간의 질을 근본적으로 개선하는 변화입니다. 새로운 컬러 팔레트는 다크 모드와 라이트 모드를 모두 지원하며, 키워드, 문자열, 에러, 함수, 숫자에 각각 다른 색상을 부여합니다.
+
+```sql
+-- 컬러 스킴 커스터마이징
+.highlight_colors column_name darkgreen bold_underline
+.highlight_colors numeric_value red bold
+.highlight_colors string_value purple2
+FROM ducks;
+```
+
+다이내믹 프롬프트는 현재 연결된 데이터베이스와 스키마를 실시간으로 표시합니다:
+
+```
+memory D ATTACH 'my_database.duckdb';
+memory D USE my_database;
+my_database D CREATE SCHEMA analytics;
+my_database D USE analytics;
+my_database.analytics D -- 현재 위치가 한눈에!
+```
+
+이것이 중요한 이유는, 여러 데이터베이스를 동시에 ATTACH하는 DuckDB의 멀티-카탈로그 아키텍처에서 "지금 내가 어디에 있는지"를 즉시 파악할 수 있게 해주기 때문입니다.
+
+### `.tables` 명령과 마지막 결과 재사용
+
+`.tables` 명령은 연결된 모든 카탈로그, 스키마, 테이블, 컬럼을 시각적 카드 형태로 보여줍니다:
+
+```
+memory D ATTACH 'analytics.duckdb' AS analytics;
+memory D .tables
+```
+
+```
+ ────────────── analytics ────────────────
+ ───────────────── main ──────────────────
+┌─────────────────┐┌──────────────────────┐
+│     metrics     ││       sessions       │
+│                 ││                      │
+│ id      integer ││ user_id      bigint  │
+│ value   double  ││ duration_ms  integer │
+│ ts    timestamp ││ page_count   integer │
+└─────────────────┘└──────────────────────┘
+```
+
+특히 강력한 기능은 언더스코어(`_`)를 이용한 마지막 결과 재사용입니다:
+
+```sql
+-- 시간이 오래 걸리는 집계 쿼리 실행
+SELECT region, SUM(revenue) AS total
+FROM sales
+GROUP BY region
+ORDER BY total DESC;
+
+-- 결과를 다시 계산하지 않고 즉시 재사용!
+FROM _ WHERE total > 1000000;
+
+-- 파일로 내보내기도 가능
+COPY _ TO 'top_regions.parquet';
+```
+
+이 기능은 특히 대용량 데이터를 탐색할 때 빛을 발합니다. 수십 초가 걸리는 쿼리를 다시 실행하지 않고 결과를 필터링하거나 추가 가공할 수 있기 때문입니다.
+
+### 내장 페이저
+
+CLI에 드디어 페이저가 내장되었습니다. 50행 이상의 결과는 자동으로 페이저 모드로 전환됩니다:
+
+```sql
+.maxrows 100
+FROM range(0, 100);
+-- Page Up/Page Down으로 탐색, Q로 종료
+-- macOS에서는 Fn + Up/Down 사용
+```
+
+이전까지는 긴 결과를 보려면 `| less` 같은 외부 파이프라인에 의존해야 했습니다. 이제 DuckDB CLI 하나로 완결된 분석 환경을 구성할 수 있습니다.
+
+## PEG 파서: 확장 가능한 파싱의 미래
+
+DuckDB 1.5에는 PEG(Parser Expression Grammars) 기반의 실험적 파서가 포함되었습니다. 기존 파서를 완전히 대체하는 것은 아니며, 현재는 옵트인 방식으로 사용합니다:
+
+```sql
+CALL enable_peg_parser();
+```
+
+PEG 파서가 도입된 배경에는 세 가지 핵심 동기가 있습니다:
+
+첫째, **더 나은 오류 메시지**입니다. 기존 Bison 기반 파서는 구문 오류가 발생했을 때 "syntax error at or near ..." 같은 모호한 메시지를 출력했습니다. PEG 파서는 문맥을 이해하고 구체적인 수정 제안을 합니다.
+
+둘째, **확장 문법 지원**입니다. DuckDB의 확장 시스템은 새로운 함수와 타입을 추가할 수 있지만, 새로운 SQL 구문을 추가하는 것은 불가능했습니다. PEG 파서는 확장이 자체 문법 규칙을 등록할 수 있게 해줍니다.
+
+셋째, **자동 완성 개선**입니다. PEG 파서는 이미 TAB 키를 이용한 구문 제안에 활용되고 있습니다:
+
+```
+animals_db D FROM ducks WHERE habitat IS
+IS           ISNULL       ILIKE        IN           INTERSECT    LIKE
+```
+
+> **성능 트레이드오프:** PEG 파서는 밀리초 단위의 약간의 오버헤드가 있지만, 분석 쿼리 자체가 수초~수분 걸리는 것을 고려하면 무시할 수 있는 수준입니다. CWI에서 발표한 CIDR 2026 논문에서 상세한 벤치마크를 확인할 수 있습니다.
+
+DuckDB 팀은 다음 릴리즈에서 PEG 파서를 기본값으로 전환할 계획입니다. 2.0에서의 완전한 전환을 위한 점진적 마이그레이션 전략이라 할 수 있습니다.
+
+## 내장 GEOMETRY 타입: 공간 데이터의 퍼스트 클래스 시민 승격
+
+### 왜 코어로 편입시켰나
+
+DuckDB 1.5에서 가장 아키텍처적으로 의미 있는 변화는 GEOMETRY 타입의 코어 편입입니다. 이전에는 `spatial` 확장을 설치해야만 GEOMETRY 컬럼을 생성할 수 있었습니다.
+
+이 결정의 배경에는 생태계의 변화가 있습니다. Apache Parquet이 GEOMETRY를 퍼스트 클래스 컬럼 타입으로 지원하기 시작했고, Iceberg와 DuckLake도 같은 방향으로 움직이고 있습니다. GeoJSON, PostGIS, GeoPandas, GeoPackage 등 공간 데이터 포맷은 이미 널리 사용되고 있습니다. DuckDB가 이런 데이터를 확장 설치 없이 바로 읽고 쓸 수 있어야 한다는 것은 자연스러운 결론이었습니다.
+
+```sql
+-- 확장 설치 없이 바로 GEOMETRY 사용 가능
+CREATE TABLE locations (
+    id INTEGER,
+    name VARCHAR,
+    geom GEOMETRY
+);
+
+-- WKT(Well-Known Text)로 포인트 데이터 삽입
+INSERT INTO locations VALUES
+    (1, 'Seoul Station', ST_GeomFromText('POINT(126.9726 37.5547)')),
+    (2, 'Gangnam Station', ST_GeomFromText('POINT(127.0276 37.4979)'));
+
+-- Parquet로 내보내기 — GEOMETRY가 네이티브 컬럼 타입으로 저장됨
+COPY locations TO 'locations.parquet';
+```
+
+### 축 순서(Axis Order) 변경: 주의가 필요한 브레이킹 체인지
+
+`spatial` 확장에서 오랫동안 혼란의 원인이 되었던 축 순서 문제가 드디어 해결됩니다. 기존에는 `ST_Distance_Spheroid`, `ST_Area_Spheroid`, `ST_Transform` 같은 함수가 (x = 위도, y = 경도) 순서를 가정했습니다. 이는 다른 GIS 시스템의 (x = 경도, y = 위도) 관례와 반대였죠.
+
+```sql
+-- v1.5에서 새로운 축 순서 옵트인
+SET geometry_always_xy = true;
+
+-- 이제 x = 경도, y = 위도 (대부분의 GIS 시스템과 동일)
+SELECT ST_Distance_Spheroid(
+    ST_Point(126.9726, 37.5547),  -- 서울역 (경도, 위도)
+    ST_Point(127.0276, 37.4979)   -- 강남역 (경도, 위도)
+) AS distance_meters;
+```
+
+이 변경은 점진적으로 적용됩니다:
+
+- **v1.5**: `geometry_always_xy = true`로 옵트인 가능. 미설정 시 경고 출력
+- **v2.0**: 경고가 에러로 변경. `false`로 옵트아웃 가능
+- **v2.1**: `true`가 기본값으로 확정
+
+> **마이그레이션 팁:** 기존에 `ST_FlipCoordinates`를 사용해 축 순서를 맞추던 코드가 있다면, `geometry_always_xy = true`로 전환한 후 해당 호출을 제거하세요.
+
+## 레이크하우스 통합: DuckLake, Delta, Iceberg 모두 진화
+
+### DuckLake v0.4 — v1.0을 향한 마지막 준비
+
+DuckDB 1.5에서 DuckLake 스펙이 v0.4로 업데이트되었습니다. 2026년 4월에 출시될 DuckLake 1.0과 동일한 스펙을 목표로 하며, 핵심 변경 사항은 다음과 같습니다:
+
+```sql
+-- DuckLake 카탈로그 연결
+ATTACH 'ducklake:metadata.duckdb' AS my_lake;
+
+-- 정렬된 테이블 생성 — 읽기 성능 최적화
+CREATE TABLE my_lake.sales (
+    sale_date DATE,
+    region VARCHAR,
+    amount DECIMAL(10, 2)
+) WITH (sorted_by = ['sale_date', 'region']);
+
+-- 매크로 지원으로 재사용 가능한 변환 정의
+CREATE MACRO my_lake.quarterly_revenue(start_date, end_date) AS TABLE
+    SELECT region, SUM(amount) AS revenue
+    FROM my_lake.sales
+    WHERE sale_date BETWEEN start_date AND end_date
+    GROUP BY region;
+```
+
+DuckLake의 정렬된 테이블(Sorted Tables)은 특히 시계열 데이터에서 중요합니다. 데이터가 물리적으로 정렬되어 저장되므로, 범위 쿼리에서 불필요한 파일을 건너뛸 수 있어 읽기 성능이 극적으로 향상됩니다. 또한 삭제 인라이닝(Deletion Inlining)과 부분 삭제 파일(Partial Delete Files) 기능은 UPDATE/DELETE가 빈번한 워크로드에서 "작은 파일 문제"를 완화합니다.
+
+### Delta Lake: Unity Catalog 쓰기 지원
+
+Delta Lake 확장은 Unity Catalog를 통한 쓰기 지원에 초점을 맞췄습니다:
+
+```sql
+-- Unity Catalog를 통한 Delta 테이블 쓰기
+ATTACH 'unity:' AS uc (TYPE unity_catalog);
+INSERT INTO uc.my_schema.my_table
+SELECT * FROM read_parquet('new_data/*.parquet');
+
+-- 멱등성 쓰기 — 같은 데이터를 두 번 넣어도 안전
+COPY my_data TO uc.my_schema.my_table (IDEMPOTENT true);
+
+-- 테이블 체크포인트 — 작은 파일 병합
+CHECKPOINT uc.my_schema.my_table;
+```
+
+### Iceberg: 테이블 속성과 BigLake 지원
+
+Iceberg 확장은 `CREATE TABLE` 시 테이블 속성을 지정할 수 있게 되었습니다:
+
+```sql
+-- Iceberg 테이블 생성 시 속성 지정
+CREATE TABLE test_table (a INTEGER, b VARCHAR)
+WITH (
+    'format-version' = '2',
+    'location' = 's3://my-bucket/warehouse/test_table',
+    'write.parquet.compression-codec' = 'zstd',
+    'property1' = 'value1'
+);
+```
+
+`EXTRA_HTTP_HEADERS` 전달 기능으로 Google BigLake에 대한 접근도 가능해졌습니다. Iceberg의 대규모 업데이트(VARIANT 지원 포함)는 v1.5.1에서 제공될 예정입니다.
+
+## 네트워크 스택 전환: httplib에서 curl로
+
+DuckDB의 HTTP 통신 백엔드가 httplib에서 curl로 전환되었습니다. 이 변경은 겉으로는 보이지 않지만 매우 중요합니다.
+
+curl은 세계에서 가장 널리 테스트된 오픈소스 HTTP 라이브러리입니다. 프록시 지원, HTTP/2, 인증서 처리 등에서 httplib보다 훨씬 성숙합니다. 기존 설정(`http_timeout`, `http_retries` 등)은 그대로 유지되며, SSL 라이브러리도 여전히 openssl입니다.
+
+```sql
+-- 기존 설정 그대로 동작
+SET http_timeout = 30000;         -- 30초 타임아웃
+SET http_retries = 3;             -- 3회 재시도
+SET http_retry_wait_ms = 1000;    -- 재시도 간 1초 대기
+
+-- S3에서 대용량 Parquet 읽기 — curl 백엔드가 안정적으로 처리
+SELECT COUNT(*) FROM read_parquet('s3://my-bucket/data/**/*.parquet');
+```
+
+> **방화벽 주의:** 확장 다운로드 초기 단계에서는 여전히 httplib이 사용되며 HTTP로 통신합니다. httpfs 로드 후에는 curl 백엔드가 HTTPS를 사용합니다. 모든 확장은 암호화 서명되어 있어 보안 위험은 없지만, 방화벽 정책에서 HTTP를 차단하는 환경이라면 주의가 필요합니다.
+
+## read_duckdb 함수와 ODBC 스캐너
+
+### read_duckdb: ATTACH 없이 바로 읽기
+
+새로운 `read_duckdb` 테이블 함수는 DuckDB 데이터베이스를 ATTACH하지 않고 직접 읽을 수 있게 합니다. 특히 글로빙을 지원하므로, 여러 DuckDB 파일을 한 번에 읽을 수 있습니다:
+
+```sql
+-- 여러 DuckDB 파일을 글로빙으로 한 번에 읽기
+SELECT region, SUM(revenue) AS total_revenue
+FROM read_duckdb('monthly_reports_*.db', table_name='sales')
+GROUP BY region;
+
+-- 특정 디렉토리의 모든 DuckDB 파일 집계
+SELECT MIN(created_at), MAX(created_at), COUNT(*)
+FROM read_duckdb('/data/shards/shard_*.duckdb');
+```
+
+이 함수는 데이터 레이크 파이프라인에서 DuckDB를 "파일 포맷"으로 활용할 때 특히 유용합니다. Parquet처럼 DuckDB 파일을 일급 데이터 소스로 취급할 수 있게 되었습니다.
+
+### ODBC 스캐너: 레거시 데이터베이스 브릿지
+
+ODBC 스캐너 확장은 Oracle, SQL Server, DB2 같은 레거시 데이터베이스에 직접 연결하여 쿼리할 수 있게 합니다:
+
+```sql
+-- ODBC 스캐너 로드
+LOAD odbc_scanner;
+
+-- Oracle 연결
+SET VARIABLE oracle_conn = odbc_connect(
+    'Driver={Oracle Driver};DBQ=//db.example.com:1521/PROD;UID=analyst;PWD=secure123;'
+);
+
+-- Oracle 데이터를 DuckDB에서 직접 분석
+SELECT department, AVG(salary) AS avg_salary
+FROM odbc_query(getvariable('oracle_conn'),
+    'SELECT department, salary FROM hr.employees')
+GROUP BY department
+ORDER BY avg_salary DESC;
+
+-- Oracle 데이터를 로컬 Parquet으로 추출
+COPY (
+    SELECT * FROM odbc_query(getvariable('oracle_conn'),
+        'SELECT * FROM sales.orders WHERE order_date > DATE ''2026-01-01''')
+) TO 'recent_orders.parquet';
+```
+
+이 기능은 "데이터 레이크하우스로의 마이그레이션"에서 핵심적인 역할을 합니다. DuckDB 하나로 레거시 시스템의 데이터를 추출하고, 변환하고, 모던 포맷으로 저장하는 간단한 ELT 파이프라인을 구축할 수 있습니다.
+
+## 람다 구문 변경과 마이그레이션 전략
+
+DuckDB 1.3에서 도입된 Python 스타일 람다 구문(`lambda x: x + 1`)이 표준이 되고 있습니다. 기존 화살표 구문(`x -> x + 1`)은 JSON 추출 연산자(`->`)와의 우선순위 충돌 문제가 있었습니다.
+
+```sql
+-- 권장: 새로운 람다 구문
+SELECT list_transform([1, 2, 3], lambda x: x * 2);
+-- 결과: [2, 4, 6]
+
+-- 인덱스 포함 람다
+SELECT list_transform(['a', 'b', 'c'], lambda x, i: x || '_' || i::VARCHAR);
+-- 결과: [a_0, b_1, c_2]
+
+-- 필터와 조합
+SELECT list_filter(
+    [10, 25, 30, 45, 50],
+    lambda x: x > 20 AND x < 50
+);
+-- 결과: [25, 30, 45]
+
+-- 기존 화살표 구문은 경고 출력 (v2.0에서 기본 비활성화)
+SELECT list_transform([1, 2, 3], x -> x + 1);
+-- WARNING: Deprecated lambda arrow (->) detected.
+
+-- 경고 동작 제어
+SET lambda_syntax = 'ENABLE_SINGLE_ARROW';   -- 경고 억제
+SET lambda_syntax = 'DISABLE_SINGLE_ARROW';  -- 에러로 전환
+```
+
+> **마이그레이션 권장:** 기존 코드베이스에서 `->` 람다를 사용하고 있다면, DuckDB 2.0 릴리즈 전에 `lambda x:` 구문으로 전환하세요. `grep -r ' -> ' *.sql`로 영향받는 쿼리를 찾을 수 있습니다.
+
+## Azure 쓰기 지원
+
+DuckDB 1.5에서 Azure Blob Storage와 ADLSv2에 대한 쓰기가 공식 지원됩니다:
+
+```sql
+-- Azure Blob Storage에 Parquet 쓰기
+COPY (SELECT * FROM my_analysis)
+TO 'az://analytics-output/2026/03/report.parquet';
+
+-- ADLSv2에 CSV 쓰기
+COPY monthly_summary
+TO 'abfss://data-lake/exports/summary.csv';
+
+-- 파티셔닝된 출력
+COPY (SELECT * FROM events)
+TO 'az://events-archive/' (
+    FORMAT PARQUET,
+    PARTITION_BY (event_date),
+    OVERWRITE_OR_IGNORE true
+);
+```
+
+S3에 이어 Azure도 지원됨으로써, DuckDB를 주요 클라우드 환경의 데이터 레이크와 직접 연동하는 데 더 이상 장벽이 없습니다.
+
+## DuckDB 2.0을 향한 로드맵
+
+DuckDB 1.5는 2026년 9월 예정인 DuckDB 2.0으로 가는 마지막 정류장입니다. 현재 알려진 2.0의 주요 변경 사항은 다음과 같습니다:
+
+- **PEG 파서 기본 전환**: 실험적 상태에서 기본 파서로 승격
+- **람다 화살표 구문 기본 비활성화**: `lambda x:` 구문이 유일한 기본 방법
+- **geometry_always_xy 기본 true**: v2.1에서 완전 확정
+- **DuckLake 1.0**: 프로덕션 레디 레이크하우스 포맷
+
+현재 v1.4 LTS(Andium)를 사용하는 프로덕션 환경이라면, 2026년 9월 EOL 전에 마이그레이션 계획을 세워야 합니다.
+
+## 결론: DuckDB는 더 이상 "작은 분석 도구"가 아니다
+
+DuckDB 1.5를 종합하면, 세 가지 거시적 트렌드가 보입니다.
+
+첫째, **데이터 포맷의 수렴**입니다. VARIANT, GEOMETRY가 코어 타입이 된 것은 DuckDB가 Parquet, Iceberg, Delta 등 모든 주요 데이터 포맷의 "공통 분모"를 내재화하고 있음을 의미합니다. DuckDB 하나로 어떤 포맷이든 읽고, 변환하고, 쓸 수 있는 유니버셜 분석 엔진의 비전이 현실화되고 있습니다.
+
+둘째, **개발자 경험의 성숙**입니다. 새 CLI, PEG 파서, `.tables`, 페이저, `_` 재사용 등은 모두 "DuckDB만으로 분석 작업이 완결되는" 환경을 지향합니다. Jupyter 노트북이나 별도의 SQL 클라이언트 없이도 터미널에서 강력한 데이터 탐색이 가능해졌습니다.
+
+셋째, **레이크하우스 통합의 깊이**입니다. DuckLake, Delta, Iceberg 모두 단순 읽기를 넘어 쓰기, 스키마 진화, 체크포인팅 등 프로덕션급 기능을 갖추고 있습니다. ODBC 스캐너까지 합치면, DuckDB는 레거시에서 모던 레이크하우스까지 아우르는 데이터 인프라의 허브가 됩니다.
+
+DuckDB 2.0이 6개월 앞으로 다가온 지금, 1.5에서 도입된 기능들을 미리 시험하고 마이그레이션을 준비하는 것이 현명한 전략입니다. `geometry_always_xy = true`를 설정하고, 람다 구문을 전환하고, VARIANT 타입을 실험해보세요. DuckDB의 다음 장은 지금 시작됩니다.
