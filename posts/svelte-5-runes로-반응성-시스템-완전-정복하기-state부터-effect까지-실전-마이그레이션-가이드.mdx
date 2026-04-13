@@ -1,0 +1,939 @@
+---
+title: 'Svelte 5 Runes로 반응성 시스템 완전 정복하기: $state부터 $effect까지 실전 마이그레이션 가이드'
+excerpt: 'Svelte 5의 Runes 시스템을 심층 분석합니다. $state, $derived, $effect, $props의 동작 원리부터 Svelte 4에서의 마이그레이션 전략, 그리고 프로덕션에서 활용할 수 있는 고급 패턴까지 코드 예제와 함께 다룹니다.'
+date: '2026-04-13'
+category: 'FRONTEND'
+tags: ['Svelte', 'Svelte 5', 'Runes', '반응성', '프론트엔드']
+featured: false
+---
+
+# Svelte 5 Runes로 반응성 시스템 완전 정복하기
+
+## 들어가며: 왜 Runes인가?
+
+프론트엔드 프레임워크의 핵심은 결국 **반응성(reactivity)**입니다. 사용자의 입력이나 데이터의 변화가 UI에 자동으로 반영되는 것, 이것이 모든 현대 프레임워크가 해결하려는 근본 문제입니다. React는 `useState`와 가상 DOM을, Vue는 `ref`와 `reactive`를, Solid는 시그널(signals)을 선택했습니다. Svelte는 오랫동안 컴파일러 기반의 암묵적 반응성으로 차별화했지만, Svelte 5에서 **Runes**라는 완전히 새로운 반응성 프리미티브를 도입하며 패러다임 전환을 이뤘습니다.
+
+Svelte 4까지의 반응성 모델은 마법처럼 편리했지만, 근본적인 한계가 있었습니다. `let` 선언만으로 반응성이 부여되는 방식은 `.svelte` 파일 내부에서만 동작했고, `$:` 반응 구문은 실행 순서를 예측하기 어려웠으며, 반응성 로직을 컴포넌트 밖으로 추출하기가 까다로웠습니다. 이러한 한계는 애플리케이션 규모가 커질수록 명확해졌고, 복잡한 상태 관리 시나리오에서 개발자들이 프레임워크의 경계에 부딪히는 일이 빈번했습니다.
+
+Runes는 이 모든 문제를 해결합니다. `$state`, `$derived`, `$effect`, `$props`라는 명시적 프리미티브를 통해 반응성을 선언하며, 이 프리미티브들은 `.svelte` 파일뿐만 아니라 `.svelte.js`나 `.svelte.ts` 파일에서도 동일하게 동작합니다. 컴파일러가 이 특수한 Rune 함수 호출을 감지하고 적절한 반응성 코드로 변환하는 방식이므로, 런타임 오버헤드 없이 세밀한 반응성을 구현할 수 있습니다. 이 글에서는 각 Rune의 동작 원리를 깊이 파고들고, Svelte 4에서의 마이그레이션 전략과 프로덕션 환경에서 검증된 고급 패턴들을 상세히 다루겠습니다.
+
+## $state: 반응성의 기초
+
+### 기본 사용법과 내부 동작
+
+`$state`는 Runes 시스템의 가장 기본적인 빌딩 블록입니다. 변수를 반응적으로 만들어 해당 변수가 변경될 때 UI가 자동으로 업데이트되도록 합니다. 다른 프레임워크의 `useState`나 `ref`와 달리, `$state`로 선언된 변수는 일반 JavaScript 변수처럼 동작합니다. 래퍼 객체나 특별한 setter 함수가 필요 없습니다.
+
+```svelte
+<script>
+  let count = $state(0);
+  let name = $state('Svelte');
+
+  function increment() {
+    // 일반 변수처럼 직접 수정
+    count++;
+  }
+
+  function updateName(newName) {
+    // setter 함수 없이 직접 할당
+    name = newName;
+  }
+</script>
+
+<button onclick={increment}>
+  클릭 횟수: {count}
+</button>
+<input bind:value={name} />
+<p>안녕하세요, {name}!</p>
+```
+
+컴파일러는 내부적으로 `$state` 선언을 시그널(signal) 기반의 getter/setter 쌍으로 변환합니다. `count`를 읽을 때는 현재 실행 중인 effect나 derived가 이 시그널을 구독하게 되고, `count`에 새 값을 할당하면 구독자들에게 변경 알림이 전파됩니다. 이 모든 과정이 컴파일 타임에 결정되므로 런타임 비용이 극히 적습니다.
+
+### 깊은 반응성(Deep Reactivity)
+
+`$state`의 가장 강력한 특징 중 하나는 **깊은 반응성**입니다. 객체나 배열을 `$state`로 감싸면 JavaScript `Proxy`를 통해 내부 속성까지 반응적으로 추적됩니다. 이는 중첩된 객체의 속성을 변경하거나 배열에 요소를 추가할 때도 UI가 정확히 업데이트된다는 의미입니다.
+
+```svelte
+<script>
+  let todos = $state([
+    { id: 1, text: '장보기', done: false },
+    { id: 2, text: '운동하기', done: true },
+    { id: 3, text: '코드 리뷰', done: false }
+  ]);
+
+  function toggleTodo(id) {
+    // 중첩 속성 직접 수정 — 반응적으로 추적됨
+    const todo = todos.find(t => t.id === id);
+    if (todo) todo.done = !todo.done;
+  }
+
+  function addTodo(text) {
+    // push도 반응적으로 동작
+    todos.push({
+      id: todos.length + 1,
+      text,
+      done: false
+    });
+  }
+
+  function removeDone() {
+    // 배열 재할당도 물론 동작
+    todos = todos.filter(t => !t.done);
+  }
+</script>
+
+<ul>
+  {#each todos as todo (todo.id)}
+    <li class:done={todo.done}>
+      <input
+        type="checkbox"
+        checked={todo.done}
+        onchange={() => toggleTodo(todo.id)}
+      />
+      {todo.text}
+    </li>
+  {/each}
+</ul>
+```
+
+Svelte의 깊은 반응성은 재귀적으로 적용됩니다. 배열이나 단순 객체(plain object)를 만나면 Proxy로 감싸지만, 클래스 인스턴스나 `Object.create`로 생성된 객체는 프록시하지 않습니다. 이러한 설계는 의도적입니다. 클래스는 자체적인 인캡슐레이션과 메서드를 가지므로, 무분별한 프록싱이 오히려 예측 불가능한 동작을 유발할 수 있기 때문입니다.
+
+### $state.raw: 불변 데이터를 위한 최적화
+
+대규모 데이터셋을 다룰 때 깊은 반응성의 Proxy 오버헤드가 문제가 될 수 있습니다. 수천 개의 행을 가진 테이블 데이터나 읽기 전용 설정 객체처럼 내부 속성을 직접 수정하지 않는 경우, `$state.raw`를 사용하면 Proxy 생성을 건너뛰어 성능을 크게 개선할 수 있습니다.
+
+```svelte
+<script>
+  // 10,000개 행의 분석 데이터 — 개별 속성 수정 없음
+  let analyticsData = $state.raw([]);
+
+  async function fetchData() {
+    const response = await fetch('/api/analytics');
+    const data = await response.json();
+    // 전체 배열을 교체 (개별 요소 수정 아님)
+    analyticsData = data;
+  }
+
+  // 이것은 동작하지 않음 — raw 상태는 재할당만 가능
+  // analyticsData[0].views = 100; // ❌ 효과 없음
+
+  // 올바른 방법: 새 배열로 교체
+  function updateRow(index, newViews) {
+    analyticsData = analyticsData.map((row, i) =>
+      i === index ? { ...row, views: newViews } : row
+    );
+  }
+</script>
+```
+
+> **성능 팁:** 10,000개 이상의 요소를 가진 배열이나 깊이 중첩된 읽기 전용 객체에는 `$state.raw`를 사용하세요. 벤치마크에 따르면 대규모 데이터셋에서 초기 렌더링 시간이 최대 40%까지 개선될 수 있습니다.
+
+### 클래스에서의 $state 활용
+
+`$state`는 클래스 필드에서도 사용할 수 있어, 객체 지향 스타일의 상태 관리가 가능합니다. 컴파일러는 `$state`가 사용된 필드를 프라이빗 필드와 getter/setter 쌍으로 변환합니다.
+
+```svelte
+<script>
+  class Counter {
+    count = $state(0);
+    name = $state('기본');
+
+    constructor(name, initial = 0) {
+      this.name = name;
+      this.count = initial;
+    }
+
+    increment = () => {
+      this.count++;
+    };
+
+    decrement = () => {
+      this.count--;
+    };
+
+    reset = () => {
+      this.count = 0;
+    };
+  }
+
+  let counter = new Counter('메인 카운터', 10);
+</script>
+
+<h2>{counter.name}</h2>
+<p>현재 값: {counter.count}</p>
+<button onclick={counter.increment}>+1</button>
+<button onclick={counter.decrement}>-1</button>
+<button onclick={counter.reset}>초기화</button>
+```
+
+> **주의:** 클래스 메서드를 이벤트 핸들러로 전달할 때 `this` 바인딩에 주의하세요. `onclick={counter.increment}`에서 일반 메서드를 사용하면 `this`가 버튼 엘리먼트를 가리킵니다. 화살표 함수로 정의하거나 `onclick={() => counter.increment()}`를 사용하세요.
+
+## $derived: 선언적 파생 상태
+
+### 기존 $: 구문의 문제점
+
+Svelte 4에서는 파생 상태를 `$:` 반응 구문으로 선언했습니다. 이 접근법은 간단한 경우에는 편리했지만, 복잡한 시나리오에서 여러 문제를 유발했습니다. 실행 순서가 비직관적이었고, 의존성 추적이 불명확했으며, 부수 효과와 파생 값 계산이 동일한 문법으로 표현되어 코드의 의도를 파악하기 어려웠습니다.
+
+```svelte
+<!-- Svelte 4: $: 구문의 모호함 -->
+<script>
+  let items = [];
+  let filter = 'all';
+
+  // 이것은 파생 값? 부수 효과?
+  $: filteredItems = items.filter(item =>
+    filter === 'all' ? true : item.status === filter
+  );
+
+  // 이것도 $:이지만 완전히 다른 목적
+  $: console.log('필터 변경됨:', filter);
+
+  // 실행 순서 보장 없음
+  $: total = filteredItems.length;
+</script>
+```
+
+### $derived로 명확한 파생 상태 선언
+
+`$derived`는 이러한 모호함을 완전히 제거합니다. 순수한 파생 값 계산만을 위한 전용 프리미티브로, 부수 효과를 허용하지 않으며 의존성을 자동으로 정확하게 추적합니다.
+
+```svelte
+<script>
+  let items = $state([
+    { id: 1, text: '우유 사기', status: 'pending' },
+    { id: 2, text: '이메일 확인', status: 'done' },
+    { id: 3, text: '회의 준비', status: 'pending' }
+  ]);
+  let filter = $state('all');
+
+  // 명확한 파생 상태 — 의존성 자동 추적
+  let filteredItems = $derived(
+    items.filter(item =>
+      filter === 'all' ? true : item.status === filter
+    )
+  );
+
+  // 파생의 파생도 자연스럽게 체이닝
+  let totalCount = $derived(filteredItems.length);
+  let pendingCount = $derived(
+    items.filter(i => i.status === 'pending').length
+  );
+  let completionRate = $derived(
+    items.length > 0
+      ? Math.round(((items.length - pendingCount) / items.length) * 100)
+      : 0
+  );
+</script>
+
+<div>
+  <p>전체: {items.length} | 필터링: {totalCount} | 완료율: {completionRate}%</p>
+  <select bind:value={filter}>
+    <option value="all">전체</option>
+    <option value="pending">진행 중</option>
+    <option value="done">완료</option>
+  </select>
+</div>
+```
+
+### $derived.by: 복잡한 파생 로직
+
+단순한 표현식으로 표현하기 어려운 복잡한 파생 로직에는 `$derived.by`를 사용합니다. 함수를 인자로 받으며, 그 함수 내부에서 동기적으로 읽히는 모든 반응 상태가 의존성으로 추적됩니다.
+
+```svelte
+<script>
+  let transactions = $state([
+    { amount: 5000, type: 'income', date: '2026-04-01' },
+    { amount: -2000, type: 'expense', date: '2026-04-02' },
+    { amount: 15000, type: 'income', date: '2026-04-03' },
+    { amount: -3500, type: 'expense', date: '2026-04-05' },
+    { amount: -1200, type: 'expense', date: '2026-04-10' }
+  ]);
+
+  let summary = $derived.by(() => {
+    let totalIncome = 0;
+    let totalExpense = 0;
+    let maxTransaction = { amount: 0 };
+
+    for (const tx of transactions) {
+      if (tx.type === 'income') {
+        totalIncome += tx.amount;
+      } else {
+        totalExpense += Math.abs(tx.amount);
+      }
+      if (Math.abs(tx.amount) > Math.abs(maxTransaction.amount)) {
+        maxTransaction = tx;
+      }
+    }
+
+    return {
+      totalIncome,
+      totalExpense,
+      balance: totalIncome - totalExpense,
+      maxTransaction,
+      averageExpense: totalExpense /
+        transactions.filter(t => t.type === 'expense').length || 0
+    };
+  });
+</script>
+
+<div class="summary">
+  <p>총 수입: {summary.totalIncome.toLocaleString()}원</p>
+  <p>총 지출: {summary.totalExpense.toLocaleString()}원</p>
+  <p>잔고: {summary.balance.toLocaleString()}원</p>
+  <p>최대 거래: {summary.maxTransaction.amount.toLocaleString()}원</p>
+  <p>평균 지출: {summary.averageExpense.toLocaleString()}원</p>
+</div>
+```
+
+### 낙관적 업데이트를 위한 $derived 오버라이드
+
+Svelte 5.25부터 `$derived` 값을 일시적으로 오버라이드할 수 있습니다. 이 기능은 낙관적 UI 업데이트에 매우 유용합니다. 서버 응답을 기다리는 동안 즉시 UI를 업데이트하고, 실패 시 롤백할 수 있습니다.
+
+```svelte
+<script>
+  let { post, likePost } = $props();
+
+  // 서버의 진짜 데이터에서 파생
+  let likes = $derived(post.likes);
+
+  async function handleLike() {
+    // 즉시 UI 업데이트 (낙관적)
+    likes += 1;
+
+    try {
+      await likePost(post.id);
+      // 성공 시 서버 데이터가 post.likes를 업데이트하면
+      // $derived가 자동으로 다시 계산됨
+    } catch (error) {
+      // 실패 시 롤백
+      likes -= 1;
+    }
+  }
+</script>
+
+<button onclick={handleLike}>
+  ❤️ {likes}
+</button>
+```
+
+## $effect: 사이드 이펙트 관리
+
+### 기본 원리와 의존성 추적
+
+`$effect`는 반응 상태가 변경될 때 실행되는 사이드 이펙트를 선언합니다. React의 `useEffect`와 유사하지만, 의존성 배열을 수동으로 지정할 필요가 없습니다. Svelte가 effect 함수 내에서 동기적으로 읽히는 모든 반응 상태를 자동으로 추적합니다.
+
+```svelte
+<script>
+  let searchQuery = $state('');
+  let results = $state([]);
+  let isLoading = $state(false);
+
+  $effect(() => {
+    // searchQuery가 변경될 때마다 실행
+    const query = searchQuery.trim();
+
+    if (query.length < 2) {
+      results = [];
+      return;
+    }
+
+    isLoading = true;
+    const controller = new AbortController();
+
+    fetch(`/api/search?q=${encodeURIComponent(query)}`, {
+      signal: controller.signal
+    })
+      .then(r => r.json())
+      .then(data => {
+        results = data;
+        isLoading = false;
+      })
+      .catch(err => {
+        if (err.name !== 'AbortError') {
+          console.error('검색 실패:', err);
+          isLoading = false;
+        }
+      });
+
+    // 클린업: 다음 실행 전에 이전 요청 취소
+    return () => {
+      controller.abort();
+    };
+  });
+</script>
+
+<input
+  bind:value={searchQuery}
+  placeholder="검색어를 입력하세요..."
+/>
+
+{#if isLoading}
+  <p>검색 중...</p>
+{:else}
+  <ul>
+    {#each results as result}
+      <li>{result.title}</li>
+    {/each}
+  </ul>
+{/if}
+```
+
+**핵심 포인트:** `$effect`의 클린업 함수는 두 가지 시점에 실행됩니다. (1) effect가 재실행되기 직전, 그리고 (2) 컴포넌트가 언마운트될 때. 이를 통해 이전 비동기 작업 취소, 이벤트 리스너 해제, 타이머 정리 등을 안전하게 처리할 수 있습니다.
+
+### $effect를 사용하지 말아야 할 때
+
+`$effect` 내부에서 상태를 업데이트하는 것은 대부분의 경우 안티패턴입니다. 무한 루프를 유발하거나 불필요한 렌더링을 초래할 수 있습니다. 상태 A가 변경될 때 상태 B를 업데이트해야 한다면, `$derived`로 표현할 수 있는지 먼저 검토하세요.
+
+```svelte
+<script>
+  let count = $state(0);
+
+  // ❌ 안티패턴: effect 내에서 상태 동기화
+  // let doubled = $state(0);
+  // $effect(() => {
+  //   doubled = count * 2;
+  // });
+
+  // ✅ 올바른 방법: $derived 사용
+  let doubled = $derived(count * 2);
+
+  // ❌ 안티패턴: effect로 데이터 변환
+  // let filtered = $state([]);
+  // $effect(() => {
+  //   filtered = items.filter(i => i.active);
+  // });
+
+  // ✅ 올바른 방법: $derived 사용
+  let items = $state([
+    { name: 'A', active: true },
+    { name: 'B', active: false }
+  ]);
+  let filtered = $derived(items.filter(i => i.active));
+</script>
+```
+
+`$effect`가 적합한 경우는 다음과 같습니다:
+- DOM API 직접 조작 (Canvas, WebGL, 써드파티 라이브러리 연동)
+- 네트워크 요청
+- `localStorage`/`sessionStorage` 동기화
+- 이벤트 리스너 등록/해제
+- 로깅 및 분석 추적
+
+### $effect.pre: DOM 업데이트 전 실행
+
+일반 `$effect`는 DOM이 업데이트된 후에 실행됩니다. DOM 업데이트 전에 무언가를 처리해야 하는 경우(예: 스크롤 위치 저장) `$effect.pre`를 사용합니다.
+
+```svelte
+<script>
+  let messages = $state([]);
+  let chatContainer;
+
+  $effect.pre(() => {
+    // 새 메시지가 추가되기 전에 스크롤 위치 계산
+    if (!chatContainer) return;
+
+    const isAtBottom =
+      chatContainer.scrollHeight - chatContainer.scrollTop <=
+      chatContainer.clientHeight + 50;
+
+    // DOM 업데이트 후 실행될 일반 effect에서 사용
+    if (isAtBottom) {
+      // tick 후 스크롤 (DOM이 업데이트된 후)
+      requestAnimationFrame(() => {
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+      });
+    }
+  });
+</script>
+
+<div bind:this={chatContainer} class="chat">
+  {#each messages as msg}
+    <div class="message">{msg.text}</div>
+  {/each}
+</div>
+```
+
+## $props: 컴포넌트 인터페이스 정의
+
+### 기존 export let의 한계와 $props의 등장
+
+Svelte 4에서 컴포넌트 props는 `export let`으로 선언했습니다. 이 문법은 직관적이었지만, JavaScript의 `export` 문법을 변형한 것이었기에 혼란을 야기했습니다. `$props` Rune은 보다 명시적이고 유연한 props 선언을 가능하게 합니다.
+
+```svelte
+<!-- Svelte 4 방식 -->
+<!-- <script>
+  export let title;
+  export let description = '';
+  export let variant = 'primary';
+</script> -->
+
+<!-- Svelte 5: $props 사용 -->
+<script>
+  let {
+    title,
+    description = '',
+    variant = 'primary',
+    children,    // 슬롯 대체
+    ...restProps // 나머지 props
+  } = $props();
+</script>
+
+<div class="card card-{variant}" {...restProps}>
+  <h2>{title}</h2>
+  {#if description}
+    <p>{description}</p>
+  {/if}
+  {#if children}
+    {@render children()}
+  {/if}
+</div>
+```
+
+### TypeScript와의 통합
+
+`$props`는 TypeScript 타입 추론과 자연스럽게 통합됩니다. 제네릭 컴포넌트도 손쉽게 만들 수 있습니다.
+
+```svelte
+<script lang="ts">
+  interface ButtonProps {
+    variant?: 'primary' | 'secondary' | 'danger';
+    size?: 'sm' | 'md' | 'lg';
+    disabled?: boolean;
+    loading?: boolean;
+    onclick?: (event: MouseEvent) => void;
+    children: import('svelte').Snippet;
+  }
+
+  let {
+    variant = 'primary',
+    size = 'md',
+    disabled = false,
+    loading = false,
+    onclick,
+    children
+  }: ButtonProps = $props();
+
+  let isProcessing = $derived(loading || disabled);
+</script>
+
+<button
+  class="btn btn-{variant} btn-{size}"
+  {disabled}
+  disabled={isProcessing}
+  {onclick}
+>
+  {#if loading}
+    <span class="spinner" aria-hidden="true"></span>
+  {/if}
+  {@render children()}
+</button>
+```
+
+### $bindable: 양방향 바인딩 Props
+
+부모 컴포넌트에서 `bind:` 디렉티브로 양방향 바인딩을 사용하려면, 자식 컴포넌트에서 해당 prop을 `$bindable()`로 선언해야 합니다.
+
+```svelte
+<!-- TextInput.svelte -->
+<script lang="ts">
+  let {
+    value = $bindable(''),
+    placeholder = '',
+    oninput
+  } = $props();
+</script>
+
+<input
+  bind:value
+  {placeholder}
+  {oninput}
+/>
+
+<!-- 부모 컴포넌트 -->
+<script>
+  import TextInput from './TextInput.svelte';
+
+  let username = $state('');
+</script>
+
+<TextInput bind:value={username} placeholder="사용자 이름" />
+<p>입력값: {username}</p>
+```
+
+## 컴포넌트 밖에서의 반응성: .svelte.js/.svelte.ts
+
+### 재사용 가능한 반응성 로직 추출
+
+Runes의 가장 혁신적인 특징은 `.svelte.js`나 `.svelte.ts` 파일에서도 동작한다는 것입니다. 이를 통해 React의 커스텀 훅과 유사한 **재사용 가능한 반응성 로직**을 만들 수 있습니다. Svelte 4에서는 이를 위해 스토어(store)를 사용해야 했지만, Runes는 더 자연스럽고 직관적인 방법을 제공합니다.
+
+```typescript
+// useDebounced.svelte.ts
+// 디바운스 로직을 재사용 가능하게 추출
+export function useDebounced<T>(getter: () => T, delayMs: number = 300) {
+  let value = $state<T>(getter());
+  let timeoutId: ReturnType<typeof setTimeout>;
+
+  $effect(() => {
+    const newValue = getter();
+
+    clearTimeout(timeoutId);
+    timeoutId = setTimeout(() => {
+      value = newValue;
+    }, delayMs);
+
+    return () => clearTimeout(timeoutId);
+  });
+
+  return {
+    get current() {
+      return value;
+    }
+  };
+}
+```
+
+```typescript
+// useLocalStorage.svelte.ts
+// localStorage와 반응 상태 동기화
+export function useLocalStorage<T>(key: string, initialValue: T) {
+  let value = $state<T>(load());
+
+  function load(): T {
+    if (typeof window === 'undefined') return initialValue;
+    try {
+      const stored = localStorage.getItem(key);
+      return stored ? JSON.parse(stored) : initialValue;
+    } catch {
+      return initialValue;
+    }
+  }
+
+  $effect(() => {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch (err) {
+      console.warn(`localStorage 저장 실패 (key: ${key}):`, err);
+    }
+  });
+
+  return {
+    get value() { return value; },
+    set value(v: T) { value = v; },
+    reset() { value = initialValue; }
+  };
+}
+```
+
+```svelte
+<!-- 컴포넌트에서 사용 -->
+<script>
+  import { useDebounced } from './useDebounced.svelte.ts';
+  import { useLocalStorage } from './useLocalStorage.svelte.ts';
+
+  let searchInput = $state('');
+  const debouncedSearch = useDebounced(() => searchInput, 500);
+  const theme = useLocalStorage('theme', 'light');
+</script>
+
+<input bind:value={searchInput} />
+<p>디바운스된 검색어: {debouncedSearch.current}</p>
+
+<button onclick={() => theme.value = theme.value === 'light' ? 'dark' : 'light'}>
+  현재 테마: {theme.value}
+</button>
+```
+
+### 복잡한 상태 관리 패턴
+
+클래스와 Runes를 결합하면 프레임워크 독립적인 상태 관리 패턴을 구축할 수 있습니다.
+
+```typescript
+// todoStore.svelte.ts
+export class TodoStore {
+  todos = $state<Todo[]>([]);
+  filter = $state<'all' | 'active' | 'completed'>('all');
+
+  filtered = $derived.by(() => {
+    switch (this.filter) {
+      case 'active':
+        return this.todos.filter(t => !t.completed);
+      case 'completed':
+        return this.todos.filter(t => t.completed);
+      default:
+        return this.todos;
+    }
+  });
+
+  remaining = $derived(
+    this.todos.filter(t => !t.completed).length
+  );
+
+  add(text: string) {
+    this.todos.push({
+      id: crypto.randomUUID(),
+      text,
+      completed: false,
+      createdAt: new Date()
+    });
+  }
+
+  toggle(id: string) {
+    const todo = this.todos.find(t => t.id === id);
+    if (todo) todo.completed = !todo.completed;
+  }
+
+  remove(id: string) {
+    this.todos = this.todos.filter(t => t.id !== id);
+  }
+
+  clearCompleted() {
+    this.todos = this.todos.filter(t => !t.completed);
+  }
+}
+
+interface Todo {
+  id: string;
+  text: string;
+  completed: boolean;
+  createdAt: Date;
+}
+```
+
+## Svelte 4에서 마이그레이션하기
+
+### 단계별 마이그레이션 전략
+
+Svelte 5는 하위 호환성을 유지하므로, 점진적 마이그레이션이 가능합니다. 기존 Svelte 4 코드는 "레거시 모드"로 계속 동작하며, 파일 단위로 Runes를 도입할 수 있습니다. 자동 마이그레이션 도구 `npx sv migrate svelte-5`도 제공됩니다.
+
+```bash
+# 자동 마이그레이션 도구 실행
+npx sv migrate svelte-5
+
+# 마이그레이션 결과 확인
+git diff
+```
+
+### 주요 변환 패턴
+
+**1. 반응 변수: `let` → `$state`**
+
+```svelte
+<!-- Svelte 4 -->
+<script>
+  let count = 0;
+  let name = 'world';
+</script>
+
+<!-- Svelte 5 -->
+<script>
+  let count = $state(0);
+  let name = $state('world');
+</script>
+```
+
+**2. 파생 값: `$:` → `$derived`**
+
+```svelte
+<!-- Svelte 4 -->
+<script>
+  let width = 10;
+  let height = 20;
+  $: area = width * height;
+  $: perimeter = 2 * (width + height);
+</script>
+
+<!-- Svelte 5 -->
+<script>
+  let width = $state(10);
+  let height = $state(20);
+  let area = $derived(width * height);
+  let perimeter = $derived(2 * (width + height));
+</script>
+```
+
+**3. 사이드 이펙트: `$:` → `$effect`**
+
+```svelte
+<!-- Svelte 4 -->
+<script>
+  let query = '';
+  $: if (query.length > 2) {
+    fetchResults(query);
+  }
+</script>
+
+<!-- Svelte 5 -->
+<script>
+  let query = $state('');
+  $effect(() => {
+    if (query.length > 2) {
+      fetchResults(query);
+    }
+  });
+</script>
+```
+
+**4. Props: `export let` → `$props`**
+
+```svelte
+<!-- Svelte 4 -->
+<script>
+  export let title;
+  export let count = 0;
+</script>
+
+<!-- Svelte 5 -->
+<script>
+  let { title, count = 0 } = $props();
+</script>
+```
+
+**5. 스토어 → .svelte.ts 모듈**
+
+```typescript
+// Svelte 4: stores.ts
+import { writable, derived } from 'svelte/store';
+
+export const count = writable(0);
+export const doubled = derived(count, $c => $c * 2);
+
+// Svelte 5: stores.svelte.ts
+let count = $state(0);
+let doubled = $derived(count * 2);
+
+export function getCount() {
+  return {
+    get value() { return count; },
+    set value(v) { count = v; },
+    get doubled() { return doubled; },
+    increment() { count++; },
+    decrement() { count--; }
+  };
+}
+```
+
+### 마이그레이션 체크리스트
+
+대규모 프로젝트에서의 마이그레이션을 위한 체크리스트입니다:
+
+1. **SvelteKit 최신 버전으로 업데이트** — `npm install svelte@5 @sveltejs/kit@latest`
+2. **자동 마이그레이션 도구 실행** — `npx sv migrate svelte-5`
+3. **자동 변환 결과 검토** — 특히 복잡한 `$:` 구문과 스토어 사용 부분
+4. **스토어를 .svelte.ts로 단계적 전환** — 가장 영향 범위가 작은 것부터
+5. **이벤트 핸들러 문법 업데이트** — `on:click` → `onclick`
+6. **슬롯을 Snippet으로 전환** — `<slot>` → `{@render children()}`
+7. **테스트 실행 및 동작 확인** — 특히 반응성 타이밍이 중요한 부분
+
+## 고급 패턴과 성능 최적화
+
+### 반응성 Map/Set 활용
+
+Svelte 5는 `svelte/reactivity`에서 반응적 `Map`, `Set`, `Date`, `URL` 구현을 제공합니다. 네이티브 자료구조의 API를 그대로 사용하면서 반응성을 얻을 수 있습니다.
+
+```svelte
+<script>
+  import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+
+  let selectedTags = new SvelteSet(['javascript']);
+  let cache = new SvelteMap();
+
+  function toggleTag(tag) {
+    if (selectedTags.has(tag)) {
+      selectedTags.delete(tag);
+    } else {
+      selectedTags.add(tag);
+    }
+  }
+
+  let selectedCount = $derived(selectedTags.size);
+
+  const allTags = ['javascript', 'typescript', 'svelte', 'rust', 'go'];
+</script>
+
+<div class="tags">
+  {#each allTags as tag}
+    <button
+      class:selected={selectedTags.has(tag)}
+      onclick={() => toggleTag(tag)}
+    >
+      {tag}
+    </button>
+  {/each}
+  <p>선택됨: {selectedCount}개</p>
+</div>
+```
+
+### untrack으로 의존성 제어
+
+특정 상태 읽기를 의존성 추적에서 제외해야 할 때 `untrack`을 사용합니다. 로깅이나 분석처럼 값을 참조하되 반응적으로 추적하고 싶지 않은 경우에 유용합니다.
+
+```svelte
+<script>
+  import { untrack } from 'svelte';
+
+  let count = $state(0);
+  let logEnabled = $state(true);
+
+  $effect(() => {
+    // count 변경 시에만 실행
+    // logEnabled 변경은 이 effect를 재실행하지 않음
+    console.log(`카운트: ${count}`);
+
+    if (untrack(() => logEnabled)) {
+      sendAnalytics('count_changed', { value: count });
+    }
+  });
+</script>
+```
+
+### 컨텍스트와 Runes 결합
+
+SvelteKit의 `setContext`/`getContext`와 Runes를 결합하면 컴포넌트 트리 전체에 걸친 반응적 상태 공유가 가능합니다.
+
+```svelte
+<!-- Layout.svelte -->
+<script>
+  import { setContext } from 'svelte';
+
+  class AppState {
+    user = $state(null);
+    theme = $state('light');
+    notifications = $state([]);
+
+    unreadCount = $derived(
+      this.notifications.filter(n => !n.read).length
+    );
+
+    setUser(user) { this.user = user; }
+    toggleTheme() {
+      this.theme = this.theme === 'light' ? 'dark' : 'light';
+    }
+    addNotification(msg) {
+      this.notifications.push({
+        id: crypto.randomUUID(),
+        text: msg,
+        read: false,
+        createdAt: new Date()
+      });
+    }
+  }
+
+  const appState = new AppState();
+  setContext('app', appState);
+</script>
+
+<!-- 자식 컴포넌트 어디서든 -->
+<script>
+  import { getContext } from 'svelte';
+  const app = getContext('app');
+</script>
+
+<p>읽지 않은 알림: {app.unreadCount}</p>
+```
+
+## 결론
+
+Svelte 5의 Runes는 단순한 문법 변경이 아닙니다. 프레임워크의 반응성 모델을 근본적으로 재설계한 결과물입니다. `$state`로 명시적 반응 상태를 선언하고, `$derived`로 순수한 파생 값을 계산하며, `$effect`로 사이드 이펙트를 체계적으로 관리하고, `$props`로 컴포넌트 인터페이스를 명확히 정의합니다. 이 네 가지 프리미티브만으로 이전에 여러 개념(`let`, `$:`, `export let`, 스토어, 라이프사이클 함수)이 담당하던 역할을 일관되게 처리할 수 있습니다.
+
+특히 `.svelte.ts` 파일에서 Runes가 동작한다는 것은 게임 체인저입니다. 반응성 로직을 컴포넌트에서 분리하고, 테스트하고, 재사용하는 것이 자연스러워졌습니다. React의 커스텀 훅이나 Vue의 Composables와 같은 패턴을 Svelte에서도 깔끔하게 구현할 수 있으며, 컴파일러 기반이라는 Svelte의 장점은 그대로 유지됩니다.
+
+Svelte 4에서의 마이그레이션은 점진적으로 진행할 수 있고, 자동 마이그레이션 도구가 대부분의 변환을 처리해 줍니다. 새 프로젝트라면 처음부터 Runes를 채택하는 것을 강력히 권장합니다. 코드의 명시성과 예측 가능성이 크게 향상되며, 특히 팀 프로젝트에서 코드 리뷰와 유지보수가 훨씬 수월해집니다. Runes는 Svelte가 "컴파일러 마법"에서 "명시적이면서도 간결한 반응성"으로 성숙해가는 과정의 결정적 한 걸음입니다.
